@@ -1,0 +1,30 @@
+{
+  "name": "smartcall-easyapo",
+  "version": "1.0.0",
+  "description": "EasyApo歯科予約システムのRPA自動化",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --loader ts-node/esm --watch src/server.ts",
+    "build": "tsc",
+    "lint": "eslint src/",
+    "start": "node --env-file=.env --loader ts-node/esm src/server.ts",
+    "import": "node --env-file=.env --loader ts-node/esm src/import-reservations.ts",
+    "postinstall": "cd node_modules/@smartcall/rpa-sdk && npm install && npm run build",
+    "test:concurrent": "node test/concurrent-access-test.cjs"
+  },
+  "dependencies": {
+    "@smartcall/rpa-sdk": "github:milestone-corp/smartcall-rpa-sdk#main",
+    "dayjs": "^1.11.19",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "playwright": "^1.57.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

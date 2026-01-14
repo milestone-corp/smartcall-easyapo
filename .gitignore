@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables
+.env
+
+# Screenshots
+screenshots/
+
+# Output
+output/
+
+# Input
+input/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+*Zone.Identifier
+
+# Logs
+*.log
+npm-debug.log*
+/package-lock.json
