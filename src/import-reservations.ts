@@ -68,9 +68,7 @@ async function main() {
     headless: process.env.HEADLESS !== 'false',
   });
 
-  const context = await browser.newContext({
-    viewport: { width: 1485, height: 1440 },
-  });
+  const context = await browser.newContext();
 
   const page = await context.newPage();
 

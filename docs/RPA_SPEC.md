@@ -44,12 +44,20 @@ EasyApoシステムへの認証を行います。VueコンポーネントのAPI�
 5. `/login` APIのレスポンスを監視
 6. HTTPステータスが200以外の場合、`AuthError`をスロー
 
-### 1.3 使用するセレクター
+### 1.3 Vueコンポーネントの検索方法
 
-| セレクター | 用途 |
-|-----------|------|
-| `.login-wrapper` | ログインフォームのVueコンポーネント取得 |
-| `#col-main > div` | ログイン成功確認（メインコンポーネントの存在チェック） |
+Vueコンポーネントは`$vnode.tag`プロパティの末尾でコンポーネント名を検索します。DOM構造への依存を減らすため、固定セレクターではなくコンポーネント名で検索します。
+
+```javascript
+// コンポーネント検索パターン
+const el = Array.from(document.querySelectorAll('*'))
+  .find(el => el?.__vue__?.$vnode?.tag?.endsWith('FormLogin'));
+const formLogin = el?.__vue__;
+```
+
+| コンポーネント名 | 用途 |
+|-----------------|------|
+| `FormLogin` | ログインフォーム |
 
 ### 1.4 使用するAPI
 
@@ -100,12 +108,12 @@ EasyApoシステムへの認証を行います。VueコンポーネントのAPI�
 4. 休憩時間（`is_break_time`）を除外
 5. 既存予約と照合して空き枠を算出
 
-### 2.3 使用するセレクター
+### 2.3 Vueコンポーネントの検索
 
-| セレクター | 用途 |
-|-----------|------|
-| `#col-side > div` | サイドカレンダー（SideMain）のVueコンポーネント取得 |
-| `#col-main > div` | 予約日（ReserveDay）のVueコンポーネント取得 |
+| コンポーネント名 | 用途 |
+|-----------------|------|
+| `SideMain` | サイドカレンダー（日付選択・患者検索） |
+| `ReserveDay` | 予約日コンポーネント（予約一覧・担当者一覧） |
 
 ### 2.4 Vueコンポーネント: SideMain
 
@@ -227,8 +235,26 @@ EasyApoシステムへの認証を行います。VueコンポーネントのAPI�
 ### 4.2 処理フロー
 
 1. `SideMain.clickDay()`で対象日付を選択
-2. `reserve_rows`から対象予約を検索
-3. キャンセル処理を実行
+2. `/reservations` APIで対象予約を検索（メモ内の電話番号で特定）
+3. `ReserveDay.openReserveEdit()`で予約編集ダイアログを開く
+4. 「予約をキャンセル」ボタンをクリック
+5. `CancelAdd`コンポーネントの`form`を操作してキャンセル設定
+6. `/reservations/:id/cancel` APIでキャンセル実行
+
+### 4.3 Vueコンポーネント: CancelAdd
+
+| プロパティ/メソッド | 説明 |
+|-------------------|------|
+| `form.circumstance_type` | キャンセル/削除種別（1: キャンセル, 99: 削除） |
+| `form.cancel_type` | キャンセル種類（1: TEL, 2: TEL変更, 11: WEB, 99: 無断） |
+| `form.cancel_reason` | キャンセル理由 |
+| `form.cancel_memo` | キャンセルメモ |
+
+### 4.4 使用するAPI
+
+| エンドポイント | メソッド | 用途 |
+|---------------|---------|------|
+| `/reservations/:id/cancel` | POST | 予約キャンセル/削除 |
 
 ---
 
@@ -237,6 +263,15 @@ EasyApoシステムへの認証を行います。VueコンポーネントのAPI�
 ### 5.1 概要
 
 既存の予約を完全に削除します。キャンセルとは異なり、予約履歴を残しません。
+
+### 5.2 処理フロー
+
+1. `SideMain.clickDay()`で対象日付を選択
+2. `/reservations` APIで対象予約を検索（メモ内の電話番号で特定）
+3. `ReserveDay.openReserveEdit()`で予約編集ダイアログを開く
+4. 「予約をキャンセル」ボタンをクリック
+5. `CancelAdd`コンポーネントの`form.circumstance_type`を`99`（削除）に設定
+6. `/reservations/:id/cancel` APIで削除実行
 
 ---
 
@@ -283,7 +318,7 @@ EasyApoシステムへの認証を行います。VueコンポーネントのAPI�
 | `birthday` | 生年月日 | "1990-01-01" |
 | `tel1` | 電話番号1（主） | "09012345678" |
 | `tel2` | 電話番号2（副） | "0312345678" |
-| `mail` | メールアドレス | "example@mail.com" |
+| `mail` | メールアドレス | "user@example.com" |
 
 ### 6.6 データ構造: ReservationHistoryItem（予約履歴）
 

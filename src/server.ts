@@ -23,7 +23,7 @@ import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import { Mutex } from 'async-mutex';
-import { ScreenshotManager } from '@smartcall/rpa-sdk';
+import { ReservationRequest, ScreenshotManager } from '@smartcall/rpa-sdk';
 import {
   BrowserSessionManager,
   type Credentials,
@@ -158,7 +158,6 @@ async function ensureSessionManager(
         credentials,
         baseUrl: BASE_URL,
         headless: process.env.HEADLESS !== 'false',
-        viewport: { width: 1485, height: 1440 },
         keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       });
 
@@ -294,6 +293,7 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
       let screenshotBase64: string | undefined;
       if (isTestMode) {
         try {
+          await page.waitForTimeout(500);
           const screenshotBuffer = await page.screenshot({ fullPage: false });
           screenshotBase64 = screenshotBuffer.toString('base64');
         } catch (screenshotError) {
@@ -368,6 +368,7 @@ app.get('/menu', async (req: Request, res: Response) => {
       let screenshotBase64: string | undefined;
       if (isTestMode) {
         try {
+          await page.waitForTimeout(500);
           const screenshotBuffer = await page.screenshot({ fullPage: false });
           screenshotBase64 = screenshotBuffer.toString('base64');
         } catch (screenshotError) {
@@ -475,6 +476,7 @@ app.get('/reservations/search', async (req: Request<ParamsDictionary, unknown, u
       let screenshotBase64: string | undefined;
       if (isTestMode) {
         try {
+          await page.waitForTimeout(500);
           const screenshotBuffer = await page.screenshot({ fullPage: false });
           screenshotBase64 = screenshotBuffer.toString('base64');
           console.log(
@@ -520,7 +522,24 @@ app.get('/reservations/search', async (req: Request<ParamsDictionary, unknown, u
  * 予約作成エンドポイント
  * POST /reservations
  */
-app.post('/reservations', async (req: Request, res: Response) => {
+type ReservationCreateBody = {
+  /** 予約日（YYYY-MM-DD形式） */
+  date: string;
+  /** 予約時刻（HH:MM形式） */
+  time: string;
+  /** 所要時間（分）- オプション */
+  duration_min?: number;
+  /** 顧客ID（患者ID）- オプション */
+  customer_id?: string;
+  /** 顧客名 */
+  customer_name: string;
+  /** 顧客電話番号 */
+  customer_phone: string;
+  /** メニュー名 - オプション */
+  menu_name?: string;
+}
+
+app.post('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationCreateBody>, res: Response) => {
   const authInfo = getCredentialsFromRequest(req);
   if (!authInfo) {
     res.status(401).json({
@@ -531,7 +550,7 @@ app.post('/reservations', async (req: Request, res: Response) => {
     return;
   }
 
-  const { date, time, duration_min, customer_name, customer_phone, menu_name } = req.body;
+  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name } = req.body;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   if (!date || !time || !customer_name || !customer_phone) {
@@ -564,22 +583,22 @@ app.post('/reservations', async (req: Request, res: Response) => {
       await appointPage.navigate(BASE_URL);
 
       // 予約を作成
-      const durationMinutes = duration_min || 30;
-      const startTime = dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm');
-      const endTime = startTime.add(durationMinutes, 'minute');
+      // const durationMinutes = duration_min || 30;
+      // const startTime = dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm');
+      // const endTime = startTime.add(durationMinutes, 'minute');
       const reservations = [{
         reservation_id: `create_${Date.now()}`,
         operation: 'create' as const,
         slot: {
           date,
           start_at: time,
-          end_at: endTime.format('HH:mm'),
-          duration_min: durationMinutes,
+          // end_at: endTime.format('HH:mm'),
+          // duration_min: durationMinutes,
         },
-        customer: { name: customer_name, phone: customer_phone },
+        customer: { customer_id: String(customer_id  || ''), name: customer_name, phone: customer_phone },
         menu: { menu_id: '', external_menu_id: '', menu_name: menu_name || '' },
         staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
-      }];
+      }] satisfies ReservationRequest[];
 
       const results = await appointPage.processReservations(reservations);
       const processResult = results[0];
@@ -588,6 +607,7 @@ app.post('/reservations', async (req: Request, res: Response) => {
       let screenshotBase64: string | undefined;
       if (isTestMode) {
         try {
+          await page.waitForTimeout(500);
           const screenshotBuffer = await page.screenshot({ fullPage: false });
           screenshotBase64 = screenshotBuffer.toString('base64');
         } catch (screenshotError) {
@@ -629,7 +649,20 @@ app.post('/reservations', async (req: Request, res: Response) => {
  *
  * 既存の予約を検索し、メニュー名（患者メモ）を更新する
  */
-app.put('/reservations', async (req: Request, res: Response) => {
+type ReservationUpdateBody = {
+  /** 予約日（YYYY-MM-DD形式） */
+  date: string;
+  /** 予約時刻（HH:MM形式） */
+  time: string;
+  /** 顧客名 - オプション（音声認識の精度問題で不要に） */
+  customer_name?: string;
+  /** 顧客電話番号 */
+  customer_phone: string;
+  /** メニュー名 - オプション */
+  menu_name?: string;
+}
+
+app.put('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationUpdateBody>, res: Response) => {
   const authInfo = getCredentialsFromRequest(req);
   if (!authInfo) {
     res.status(401).json({
@@ -678,7 +711,7 @@ app.put('/reservations', async (req: Request, res: Response) => {
         reservation_id: `update_${Date.now()}`,
         operation: 'update' as const,
         slot: { date, start_at: time, end_at: '', duration_min: 0 },
-        customer: { name: customer_name, phone: customer_phone },
+        customer: { name: customer_name || '', phone: customer_phone },
         menu: { menu_id: '', external_menu_id: '', menu_name: menu_name || '' },
         staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
       }];
@@ -690,6 +723,7 @@ app.put('/reservations', async (req: Request, res: Response) => {
       let screenshotBase64: string | undefined;
       if (isTestMode) {
         try {
+          await page.waitForTimeout(500);
           const screenshotBuffer = await page.screenshot({ fullPage: false });
           screenshotBase64 = screenshotBuffer.toString('base64');
         } catch (screenshotError) {
@@ -729,7 +763,23 @@ app.put('/reservations', async (req: Request, res: Response) => {
  * 予約キャンセルエンドポイント
  * DELETE /reservations
  */
-app.delete('/reservations', async (req: Request, res: Response) => {
+type ReservationCancelBody = {
+  /** 予約日（YYYY-MM-DD形式） */
+  date: string;
+  /** 予約時刻（HH:MM形式） */
+  time: string;
+  /** 顧客名 - オプション（音声認識の精度問題で不要に） */
+  customer_name?: string;
+  /** 顧客電話番号 */
+  customer_phone: string;
+}
+
+type ReservationCancelQuery = {
+  /** 強制削除フラグ（tureが指定された場合は削除扱い、それ以外・未指定の場合はキャンセル） */
+  force?: string;
+}
+
+app.delete('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationCancelBody, ReservationCancelQuery>, res: Response) => {
   const authInfo = getCredentialsFromRequest(req);
   if (!authInfo) {
     res.status(401).json({
@@ -776,9 +826,9 @@ app.delete('/reservations', async (req: Request, res: Response) => {
       // 予約をキャンセル
       const reservations = [{
         reservation_id: `cancel_${Date.now()}`,
-        operation: 'cancel' as const,
+        operation: (req.query.force === 'true' ? 'delete' as const : 'cancel' as const),
         slot: { date, start_at: time, end_at: '', duration_min: 0 },
-        customer: { name: customer_name, phone: customer_phone },
+        customer: { name: customer_name || '', phone: customer_phone },
         menu: { menu_id: '', external_menu_id: '', menu_name: '' },
         staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
       }];
@@ -790,6 +840,7 @@ app.delete('/reservations', async (req: Request, res: Response) => {
       let screenshotBase64: string | undefined;
       if (isTestMode) {
         try {
+          await page.waitForTimeout(500);
           const screenshotBuffer = await page.screenshot({ fullPage: false });
           screenshotBase64 = screenshotBuffer.toString('base64');
         } catch (screenshotError) {
@@ -840,6 +891,8 @@ app.post('/session/restart', async (req: Request, res: Response) => {
     return;
   }
 
+  const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
+
   try {
     console.log(
       '[Server] Session restart requested'
@@ -852,9 +905,10 @@ app.post('/session/restart', async (req: Request, res: Response) => {
 
     // ログイン後のスクリーンショットを撮影（Mutex付き）
     let screenshotBase64: string | null = null;
-    if (sessionManager) {
+    if (sessionManager && isTestMode) {
       try {
         screenshotBase64 = await sessionManager.withPage(async (page) => {
+          await page.waitForTimeout(500);
           const buffer = await page.screenshot({ type: 'png' });
           return buffer.toString('base64');
         }, REQUEST_TIMEOUT_MS);
@@ -898,6 +952,16 @@ app.get('/debug/browser', async (req: Request<ParamsDictionary, unknown, unknown
     const selector = req.query.selector;
     const includeScreenshot = req.query.screenshot === 'true';
     const includeHtml = req.query.html === 'true';
+
+    // Accept: image/png の場合は画像のみを返す
+    if (req.headers.accept === 'image/png') {
+      const buffer = await sessionManager.withPage(async (page) => {
+        return await page.screenshot({ fullPage: true });
+      }, REQUEST_TIMEOUT_MS);
+      res.setHeader('Content-Type', 'image/png');
+      res.send(buffer);
+      return;
+    }
 
     const result = await sessionManager.withPage(async (page) => {
       const data: Record<string, unknown> = {
@@ -960,7 +1024,7 @@ app.get('/debug/browser', async (req: Request<ParamsDictionary, unknown, unknown
         data.html = await page.content();
       }
 
-      // スクリーンショット
+      // スクリーンショット（Base64で含める）
       if (includeScreenshot) {
         const buffer = await page.screenshot({ fullPage: true });
         data.screenshot = buffer.toString('base64');

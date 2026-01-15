@@ -65,6 +65,42 @@ npm run start:persistent
 }
 ```
 
+### GET /menu
+
+診療メニュー一覧を取得
+
+**レスポンス:**
+```json
+{
+  "success": true,
+  "treatment_items": [
+    {
+      "id": 1,
+      "title": "初診",
+      "color": "#FF0000",
+      "treatment_time": 30,
+      "use_column": [1, 2],
+      "pic": null,
+      "order": 1,
+      "resources": ["Dr1", "Dr2"]
+    }
+  ],
+  "count": 1,
+  "timing": { "total_ms": 1234 }
+}
+```
+
+| フィールド | 説明 |
+|------------|------|
+| `id` | 診療メニューID |
+| `title` | 診療メニュー名 |
+| `color` | 表示色（HEXカラーコード） |
+| `treatment_time` | 所要時間（分） |
+| `use_column` | 対応カラムID一覧 |
+| `pic` | 担当者情報（未使用） |
+| `order` | 表示順序 |
+| `resources` | 処置可能な担当者名一覧 |
+
 ### GET /slots
 
 空き枠を取得

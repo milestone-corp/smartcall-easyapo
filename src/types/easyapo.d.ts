@@ -4,12 +4,29 @@
  * EasyApoシステムのVueコンポーネントへの参照に使用する型定義
  */
 
+export type VueComponent = {
+  $vnode?: {
+    tag: string;
+  };
+}
+
+/**
+ * ログインフォームコンポーネント（Vue）
+ */
+export type FormLogin = VueComponent & {
+  form: {
+    login_id: string;
+    login_password: string;
+  };
+  execLogin: () => Promise<void>;
+}
+
 /**
  * サイドカレンダーコンポーネント（Vue）
  *
  * 日付を選択して予約日コンポーネント（ReserveDay）にデータを読み込む
  */
-export type SideMain = {
+export type SideMain = VueComponent & {
   /**
    * 指定した日付の予約データを読み込む
    *
@@ -304,9 +321,31 @@ export type ApiStore = {
 }
 
 /**
+ * 予約作成ダイアログを開くためのパラメータ
+ */
+export type OpenReserveAddParams = {
+  /** カラム番号（担当者ID） */
+  column_no: number;
+  /** 予約日（YYYY-MM-DD形式） */
+  reservation_date: string;
+  /** 開始時刻（HH:MM形式） */
+  time_from: string;
+  /** 終了時刻（HH:MM形式） */
+  time_to: string;
+}
+
+/**
+ * 予約候補情報
+ */
+export type Candidate = {
+  /** アクティブフラグ */
+  is_active: boolean;
+}
+
+/**
  * 予約日コンポーネント（Vue）
  */
-export type ReserveDay = {
+export type ReserveDay = VueComponent & {
   /** 読み込んだ日付の予約情報一覧 */
   reserve_rows: ReserveRow[];
   /** 担当者/リソース一覧 */
@@ -321,11 +360,16 @@ export type ReserveDay = {
   end_hour: number;
   /** 診療終了分（0-59） */
   end_minute: number;
+  /** 予約候補情報 */
+  candidate: Candidate;
   /** VuexストアのAPI設定 */
   $store: {
     state: {
       api: ApiStore;
     };
+    /** Vuexストアのcommitメソッド */
+    commit(type: 'openReserveAdd', payload: OpenReserveAddParams): void;
+    commit(type: 'resetCandidate'): void;
   };
   /** API通信メソッド（Axiosレスポンス形式） */
   get<T>(url: string, params: Record<string, unknown>): Promise<AxiosLikeResponse<T>>;
@@ -339,4 +383,226 @@ export type AxiosLikeResponse<T> = {
   status: number;
   statusText: string;
   headers: Record<string, string>;
+}
+
+/**
+ * キャンセル登録フォーム
+ */
+export type CancelAddForm = {
+  /** 予約ID */
+  id: number;
+  /** キャンセル/削除種別（1: キャンセル, 99: 削除） */
+  circumstance_type: 1 | 99;
+  /** キャンセル種類（1: TEL, 2: TEL変更, 11: WEB, 99: 無断） */
+  cancel_type: 1 | 2 | 11 | 99;
+  /** キャンセル理由 */
+  cancel_reason: string;
+  /** キャンセルメモ */
+  cancel_memo: string;
+  /** メール送信フラグ */
+  send_mail: number;
+  /** SMS送信フラグ */
+  send_sms: number;
+  /** LINE送信フラグ */
+  send_line: number;
+  /** 未定登録フラグ */
+  regist_undecided: number;
+}
+
+/**
+ * キャンセル登録ダイアログコンポーネント（Vue）
+ */
+export type CancelAdd = VueComponent & {
+  /** キャンセル登録フォーム */
+  form: CancelAddForm;
+}
+
+/**
+ * 予約作成/更新APIレスポンス（POST /reservations）
+ */
+export type ReservationApiResponse = {
+  /** 処理結果 */
+  result: boolean;
+  /** データ（通常null） */
+  data: null;
+  /** エラーメッセージ */
+  message: Record<string, string[]> | null;
+  /** 確認メッセージ（診療時間外等の警告がある場合） */
+  confirmation?: string;
+}
+
+/**
+ * 予約一覧取得APIレスポンス（GET /reservations）
+ */
+export type ReservationsListResponse = {
+  /** 処理結果 */
+  result: boolean;
+  /** データ */
+  data: {
+    /** 予約一覧 */
+    reservations: ReserveRow[];
+  } | null;
+  /** メッセージ */
+  message: unknown | null;
+}
+
+/**
+ * 予約作成フォームのメモ項目
+ */
+export type ReserveAddFormMemo = {
+  /** メモID */
+  id: number;
+  /** メモ内容 */
+  memo: string;
+}
+
+/**
+ * 予約作成フォーム
+ */
+export type ReserveAddForm = {
+  /** 変更元予約ID（予約変更時のみ設定） */
+  prev_reservation_id: number | null;
+  /** 患者番号（診察券番号） */
+  patient_number: string;
+  /** カラム番号（担当者/リソースのID） */
+  column_no: number;
+  /** 予約日（YYYY-MM-DD形式） */
+  reservation_date: string;
+  /** 開始時刻（HH:MM形式） */
+  time_from: string;
+  /** 終了時刻（HH:MM形式） */
+  time_to: string;
+  /** 患者名 */
+  patient_name: string;
+  /** 診療メニューID */
+  treatment_id: number | null;
+  /** 表示色 */
+  color: string;
+  /** 担当者一覧 */
+  pic: unknown[];
+  /** メモ情報 */
+  memo: ReserveAddFormMemo[];
+}
+
+/**
+ * 予約作成ダイアログコンポーネント（Vue）
+ */
+export type ReserveAdd = VueComponent & {
+  /** 予約作成フォーム */
+  form: ReserveAddForm;
+  /**
+   * 患者番号から患者情報を取得・設定
+   *
+   * form.patient_numberを設定した後に呼び出すと、
+   * 患者情報を取得してフォームに反映する
+   */
+  getPatient(): Promise<void>;
+  /**
+   * 予約メモを追加
+   *
+   * form.memoに新しいメモ項目を追加する
+   */
+  addMemo(): void;
+  /**
+   * 予約作成ダイアログを閉じる
+   */
+  clickClose(): void;
+}
+
+/**
+ * 予約編集フォームのメモ項目
+ */
+export type ReserveEditFormMemo = {
+  /** メモID */
+  id: number;
+  /** メモ内容 */
+  memo: string;
+}
+
+/**
+ * 予約編集フォーム
+ */
+export type ReserveEditForm = {
+  /** 予約ID */
+  id: number;
+  /** 親予約ID（繰り返し予約の場合） */
+  parent_id: number | null;
+  /** 繰り返しタイプ */
+  repeat_type: string | null;
+  /** 繰り返し終了日 */
+  repeat_to: string | null;
+  /** カラム番号（担当者/リソースのID） */
+  column_no: number;
+  /** 予約日（YYYY-MM-DD形式） */
+  reservation_date: string;
+  /** 開始時刻（HH:MM形式） */
+  time_from: string;
+  /** 終了時刻（HH:MM形式） */
+  time_to: string;
+  /** 患者名 */
+  patient_name: string;
+  /** 電話番号 */
+  tel: string | null;
+  /** メールアドレス */
+  mail: string;
+  /** 予約時メールアドレス */
+  reservation_mail: string | null;
+  /** 生年月日 */
+  birthday: string | null;
+  /** 診療メニューID */
+  treatment_id: number | null;
+  /** 表示色 */
+  color: string;
+  /** 担当者 */
+  pic: unknown | null;
+  /** メモ情報 */
+  memo: ReserveEditFormMemo[];
+  /** ステータス */
+  status: number;
+  /** キャンセルフラグ */
+  cancel: number;
+  /** キャンセル日 */
+  cancel_date: string | null;
+  /** ブロックフラグ */
+  block: number;
+  /** 患者情報 */
+  patient: unknown;
+  /** 患者フォーム */
+  patient_form: unknown | null;
+  /** 回答 */
+  answer: unknown | null;
+  /** 後続予約があるか */
+  has_subsequent: boolean;
+  /** 単独予約ではないか */
+  is_not_alone: boolean;
+  /** Web予約かどうか */
+  is_web_reservation: boolean;
+}
+
+/**
+ * 予約編集ダイアログコンポーネント（Vue）
+ */
+export type ReserveEdit = VueComponent & {
+  /** 予約編集フォーム */
+  form: ReserveEditForm;
+  /** 編集対象の情報が読み込み完了したか */
+  is_loaded: boolean;
+  /**
+   * 予約編集ダイアログを閉じる
+   */
+  clickClose(): void;
+  /**
+   * 予約キャンセルダイアログを表示
+   */
+  clickReserveCancel(): void;
+}
+
+/**
+ * 患者一覧ダイアログコンポーネント（Vue）
+ */
+export type PatientList = VueComponent & {
+  /**
+   * 患者一覧ダイアログを閉じる
+   */
+  clickClose(): void;
 }

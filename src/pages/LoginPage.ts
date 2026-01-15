@@ -5,14 +5,7 @@
  */
 
 import { BasePage } from '@smartcall/rpa-sdk';
-
-type FormLogin = {
-  form: {
-    login_id: string,
-    login_password: string,
-  },
-  execLogin: () => Promise<void>,
-}
+import type { FormLogin } from '../types/easyapo.d.ts';
 
 /**
  * 認証エラー
@@ -45,16 +38,22 @@ export class LoginPage extends BasePage {
 
     await this.waitForSelector('.login-wrapper')
 
-    await this.page.evaluate(
+    const formLoginError = await this.page.evaluate(
       async ({ loginId, password }) => {
-        const formLogin = (document.querySelector('.login-wrapper')?.parentElement as (null | HTMLElement & { __vue__: FormLogin }))?.__vue__
-        if (!formLogin) throw new AuthError('ログインフォームが見つかりません');
+        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: FormLogin }>('*'))
+          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('FormLogin'));
+        const formLogin = el?.__vue__;
+        if (!formLogin) return 'ログインフォームが見つかりません';
         formLogin.form.login_id = loginId;
         formLogin.form.login_password = password;
         await formLogin.execLogin();
+        return null;
       },
       { loginId, password }
     );
+    if (formLoginError) {
+      throw new AuthError(formLoginError);
+    }
 
     // 認証エラーをチェック
     const response = await loginResponsePromise;
@@ -69,6 +68,7 @@ export class LoginPage extends BasePage {
       }
       throw new AuthError('認証に失敗しました');
     }
+    await this.wait(1000)
     await this.page.waitForSelector('#loading', { state: 'hidden' });
   }
 

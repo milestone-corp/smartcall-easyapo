@@ -60,11 +60,11 @@ const LOGIN_ID = process.env.RPA_LOGIN_KEY;
 const LOGIN_PASSWORD = process.env.RPA_LOGIN_PASSWORD;
 
 // テストデータ
-const TEST_DATE = getTestDate(); // 90日後
-const TEST_TIME = '10:00';
+const TEST_DATE = getTestDate(); // 120日後
+const TEST_TIME = '15:00';
 const TEST_CUSTOMER_NAME = 'テスト テスト';
 const TEST_CUSTOMER_PHONE = '09020787562';
-const TEST_MENU_NAME = '歯の清掃';
+const TEST_MENU_NAME = '治療の続きをしたい';
 const TEST_DURATION_MIN = 30;
 
 // スクリーンショット保存先
@@ -107,12 +107,14 @@ function getTimestampedFilename(prefix) {
 }
 
 /**
- * 90日後の日付を取得
+ * 120日後くらいの日付を取得
  * @returns {string} YYYY-MM-DD形式の日付文字列
  */
 function getTestDate() {
   const date = new Date();
-  date.setDate(date.getDate() + 90);
+  date.setDate(date.getDate() + 120);
+  // 休診曜日を飛ばす(日・月休診)
+  if (date.getDay() < 1) date.setDate(date.getDate() + (2- date.getDay()));
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
@@ -204,7 +206,7 @@ async function runTests() {
   // 認証情報チェック
   if (!LOGIN_ID || !LOGIN_PASSWORD) {
     console.error('❌ 環境変数が設定されていません:');
-    console.error('   EASYAPO_LOGIN_ID, EASYAPO_LOGIN_PASSWORD');
+    console.error('   RPA_LOGIN_ID, RPA_LOGIN_PASSWORD');
     process.exit(1);
   }
 
@@ -310,7 +312,7 @@ async function runTests() {
   console.log('\n--- 5. 予約更新（メニュー変更） ---');
   if (createdReservation) {
     try {
-      const newMenuName = '虫歯治療';
+      const newMenuName = '(2回目以降の方)健診をして虫歯治療をし';
       const body = {
         date: createdReservation.date,
         time: createdReservation.time,
@@ -383,7 +385,7 @@ async function runTests() {
         time: createdReservation.time,
         customer_phone: TEST_CUSTOMER_PHONE,
       };
-      const res = await request('DELETE', '/reservations', body);
+      const res = await request('DELETE', '/reservations?force=true', body);
       const success = res.status === 200 && res.data.success;
       printResult(
         'DELETE /reservations',

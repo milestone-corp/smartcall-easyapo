@@ -39,7 +39,7 @@ export class BrowserSessionManager extends BaseBrowserSessionManager {
     // SDKの基底クラスに渡す設定
     super({
       headless: config.headless ?? true,
-      viewport: config.viewport ?? { width: 1485, height: 1440 },
+      viewport: config.viewport,
       keepAliveIntervalMs: config.keepAliveIntervalMs ?? 5 * 60 * 1000,
       browserArgs: config.browserArgs,
       locale: 'ja-JP',
@@ -80,7 +80,7 @@ export class BrowserSessionManager extends BaseBrowserSessionManager {
     if (!this.page) return false;
 
     const loginPage = new LoginPage(this.page);
-    return loginPage.isLoggedIn();
+    return await loginPage.isLoggedIn();
   }
 
   /**
