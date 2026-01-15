@@ -1354,20 +1354,38 @@ export class AppointPage extends BasePage {
     return { reservationId: found.reservationId };
   }
 
+  /** キャンセル/削除種別 */
+  private static readonly CIRCUMSTANCE_TYPE = {
+    /** キャンセル（予約履歴を残す） */
+    CANCEL: 1,
+    /** 削除（予約履歴を残さない） */
+    DELETE: 99,
+  } as const;
+
+  /** キャンセル種類 */
+  private static readonly CANCEL_TYPE = {
+    /** 電話でのキャンセル */
+    TEL: 1,
+  } as const;
+
   /**
-   * 予約をキャンセルする
+   * 予約をキャンセルまたは削除する（共通処理）
    *
    * @param params.date 予約日（YYYY-MM-DD形式）
    * @param params.time 開始時刻（HH:MM形式）
    * @param params.customerPhone 顧客電話番号（予約特定用）
-   * @returns キャンセル結果
+   * @param params.circumstanceType キャンセル/削除種別（1: キャンセル, 99: 削除）
+   * @returns 処理結果
    */
-  async cancelReservation(params: {
+  private async cancelOrDeleteReservation(params: {
     date: string;
     time: string;
     customerPhone: string;
+    circumstanceType: typeof AppointPage.CIRCUMSTANCE_TYPE[keyof typeof AppointPage.CIRCUMSTANCE_TYPE];
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, time, customerPhone } = params;
+    const { date, time, customerPhone, circumstanceType } = params;
+    const isDelete = circumstanceType === AppointPage.CIRCUMSTANCE_TYPE.DELETE;
+    const operationName = isDelete ? '削除' : 'キャンセル';
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
@@ -1391,51 +1409,55 @@ export class AppointPage extends BasePage {
     // キャンセルダイアログが表示されるまで待機
     await this.page.waitForSelector('.alert-wrapper .alert-dlList');
 
-    // 5. CancelAddコンポーネントのformを直接操作してキャンセル設定
-    const error = await this.page.evaluate(() => {
-      // キャンセル登録ダイアログのVueコンポーネントを取得
-      const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: CancelAdd }>('*'))
-        .find(el => el?.__vue__?.$vnode?.tag?.endsWith('CancelAdd'));
-      const cancelAdd = el?.__vue__;
-      if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
+    // 5. CancelAddコンポーネントのformを直接操作
+    const error = await this.page.evaluate(
+      ({ circumstanceType, cancelType }) => {
+        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: CancelAdd }>('*'))
+          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('CancelAdd'));
+        const cancelAdd = el?.__vue__;
+        if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
 
-      // キャンセル設定（circumstance_type: 1 = キャンセル, cancel_type: 1 = TEL）
-      cancelAdd.form.circumstance_type = 1;
-      cancelAdd.form.cancel_type = 1;
-      // 「登録」ボタンをクリック
-      const submitButton = el.querySelector<HTMLButtonElement>('.btn-primary')
-      if (!submitButton) {
-        return '登録ボタンが見つかりません';
+        cancelAdd.form.circumstance_type = circumstanceType;
+        if (cancelType !== undefined) {
+          cancelAdd.form.cancel_type = cancelType;
+        }
+
+        const submitButton = el.querySelector<HTMLButtonElement>('.btn-primary');
+        if (!submitButton) {
+          return '登録ボタンが見つかりません';
+        }
+        submitButton.click();
+        return null;
+      },
+      {
+        circumstanceType,
+        cancelType: isDelete ? undefined : AppointPage.CANCEL_TYPE.TEL,
       }
-      submitButton.click()
-      return null
-    });
+    );
     if (error) {
-      return { error }
+      return { error };
     }
 
-    // 6. キャンセルAPIのレスポンスを監視
+    // 6. APIレスポンスを監視
     const postResponsePromise = this.page.waitForResponse(
       (response) => {
         const url = response.url();
-        // /reservations/{id}/cancel へのPOST
         return /\/reservations\/\d+\/cancel$/.test(url) && response.request().method() === 'POST';
       }
     );
 
-    // 8. POSTレスポンスを確認
+    // 7. POSTレスポンスを確認
     const postResponse = await postResponsePromise;
     const postResponseData = await postResponse.json() as ReservationApiResponse;
 
     if (!postResponseData.result) {
-      let errorMessage = '予約キャンセルに失敗しました';
+      let errorMessage = `予約${operationName}に失敗しました`;
       if (postResponseData.message) {
         const messages = Object.values(postResponseData.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
-      console.error(`[AppointPage] 予約キャンセル失敗: ${errorMessage}`);
+      console.error(`[AppointPage] 予約${operationName}失敗: ${errorMessage}`);
 
-      // ページをリロードしてダイアログを閉じる
       await this.page.reload();
       await this.waitForLoading();
 
@@ -1445,6 +1467,25 @@ export class AppointPage extends BasePage {
     await this.waitForLoading();
 
     return { reservationId: found.reservationId };
+  }
+
+  /**
+   * 予約をキャンセルする
+   *
+   * @param params.date 予約日（YYYY-MM-DD形式）
+   * @param params.time 開始時刻（HH:MM形式）
+   * @param params.customerPhone 顧客電話番号（予約特定用）
+   * @returns キャンセル結果
+   */
+  async cancelReservation(params: {
+    date: string;
+    time: string;
+    customerPhone: string;
+  }): Promise<{ reservationId: string } | { error: string }> {
+    return this.cancelOrDeleteReservation({
+      ...params,
+      circumstanceType: AppointPage.CIRCUMSTANCE_TYPE.CANCEL,
+    });
   }
 
   /**
@@ -1460,85 +1501,10 @@ export class AppointPage extends BasePage {
     time: string;
     customerPhone: string;
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, time, customerPhone } = params;
-
-    // 1. 予約日を読み込む
-    await this.selectDate(date);
-
-    // 2. 予約を見つける
-    const found = await this.findReservationByPhoneAndTime(date, time, customerPhone);
-    if (!found) {
-      return { error: `予約が見つかりません: ${date} ${time} ${customerPhone}` };
-    }
-
-    // 3. 予約編集ダイアログを開く
-    await this.openReserveEditDialog(found.reservationId);
-
-    // 4. 「予約をキャンセル」ボタンをクリック（削除も同じダイアログ）
-    const cancelTriggerButton = await this.page.$('.alert-wrapper .contentfooter button.btn-dark');
-    if (!cancelTriggerButton) {
-      return { error: '予約をキャンセルボタンが見つかりません' };
-    }
-    await cancelTriggerButton.click();
-
-    // キャンセルダイアログが表示されるまで待機
-    await this.page.waitForSelector('.alert-wrapper .alert-dlList');
-
-    // 5. CancelAddコンポーネントのformを直接操作して削除設定
-    const error = await this.page.evaluate(() => {
-      // キャンセル登録ダイアログのVueコンポーネントを取得
-      const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: CancelAdd }>('*'))
-        .find(el => el?.__vue__?.$vnode?.tag?.endsWith('CancelAdd'));
-      const cancelAdd = el?.__vue__;
-      if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
-
-      // 削除設定（circumstance_type: 99 = 削除）
-      // または、 cancelAdd.$store.state.masters.circumstance_types?.find(item => item.label == '削除')?.value で参照してもOK
-      cancelAdd.form.circumstance_type = 99;
-
-      // 「登録」ボタンをクリック
-      const submitButton = el.querySelector<HTMLButtonElement>('.btn-primary');
-      if (!submitButton) {
-        return '登録ボタンが見つかりません';
-      }
-      submitButton.click();
-      return null;
+    return this.cancelOrDeleteReservation({
+      ...params,
+      circumstanceType: AppointPage.CIRCUMSTANCE_TYPE.DELETE,
     });
-    if (error) {
-      return { error };
-    }
-
-    // 6. 削除APIのレスポンスを監視
-    const postResponsePromise = this.page.waitForResponse(
-      (response) => {
-        const url = response.url();
-        // /reservations/{id}/cancel へのPOST（削除も同じエンドポイント）
-        return /\/reservations\/\d+\/cancel$/.test(url) && response.request().method() === 'POST';
-      }
-    );
-
-    // 7. POSTレスポンスを確認
-    const postResponse = await postResponsePromise;
-    const postResponseData = await postResponse.json() as ReservationApiResponse;
-
-    if (!postResponseData.result) {
-      let errorMessage = '予約削除に失敗しました';
-      if (postResponseData.message) {
-        const messages = Object.values(postResponseData.message).flat();
-        errorMessage = messages.join(' ') || errorMessage;
-      }
-      console.error(`[AppointPage] 予約削除失敗: ${errorMessage}`);
-
-      // ページをリロードしてダイアログを閉じる
-      await this.page.reload();
-      await this.waitForLoading();
-
-      return { error: errorMessage };
-    }
-
-    await this.waitForLoading();
-
-    return { reservationId: found.reservationId };
   }
 
 }
