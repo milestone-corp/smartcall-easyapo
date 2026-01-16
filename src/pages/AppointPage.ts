@@ -8,6 +8,7 @@ import {
   BasePage,
   type ReservationRequest as ReservationRequestBase,
   type ScreenshotManager,
+  type MenuInfo,
 } from '@smartcall/rpa-sdk';
 import type { Page } from 'playwright';
 import type {
@@ -649,6 +650,22 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * メニュー情報から診療メニューを検索する
+   *
+   * @param menu メニュー情報
+   * @returns マッチした診療メニュー、または見つからない場合はundefined
+   */
+  private async findTreatmentItem(menu?: MenuInfo): Promise<TreatmentItem | undefined> {
+    if (!menu?.menu_name && !menu?.external_menu_id) {
+      return undefined;
+    }
+    const treatmentItems = await this.getTreatmentItems();
+    return treatmentItems.find(
+      (item) => String(item.id) === menu.external_menu_id || item.title === menu.menu_name || item.title.includes(menu.menu_name!)
+    );
+  }
+
+  /**
    * 予約を作成する
    *
    * @param params.date 予約日（YYYY-MM-DD形式）
@@ -658,7 +675,7 @@ export class AppointPage extends BasePage {
    * @param params.columnNo カラム番号（担当者ID）
    * @param params.customerName 顧客名（予約名として使用）
    * @param params.patientId 患者ID（既存患者の場合）
-   * @param params.menuName 診療メニュー名（予約内容として選択）
+   * @param params.menu 診療メニュー情報（予約内容として選択）
    * @param params.customerPhone 顧客電話番号
    * @returns 作成された予約ID、または失敗時はnull
    */
@@ -670,27 +687,18 @@ export class AppointPage extends BasePage {
     columnNo: number;
     customerName: string;
     patientId?: string;
-    menuName?: string;
+    menu?: MenuInfo;
     customerPhone?: string;
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, timeFrom, timeTo, durationMin, columnNo, customerName, patientId, menuName, customerPhone } = params;
+    const { date, timeFrom, timeTo, durationMin, columnNo, customerName, patientId, menu, customerPhone } = params;
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
 
-    // メニュー名からtreatment_timeとcolorを取得（メニューが指定されている場合）
-    let menuTreatmentTime: number | undefined;
-    let menuColor: string | undefined;
-    if (menuName) {
-      const treatmentItems = await this.getTreatmentItems();
-      const matchedItem = treatmentItems.find(
-        (item) => item.title === menuName || item.title.includes(menuName)
-      );
-      if (matchedItem) {
-        menuTreatmentTime = matchedItem.treatment_time;
-        menuColor = matchedItem.color;
-      }
-    }
+    // メニューからtreatment_timeとcolorを取得
+    const matchedItem = await this.findTreatmentItem(menu);
+    const menuTreatmentTime = matchedItem?.treatment_time;
+    const menuColor = matchedItem?.color;
 
     // time_toを計算（優先順位: timeTo > durationMin > menuTreatmentTime > 既定値45分）
     const duration = durationMin ?? menuTreatmentTime ?? 45;
@@ -803,7 +811,7 @@ export class AppointPage extends BasePage {
           }
         }
       },
-      { customerName, menuColor, menuName, customerPhone }
+      { customerName, menuColor, menuName: menu?.menu_name, customerPhone }
     );
 
     // 5. 予約APIのレスポンスを監視（POST: 作成、GET: 予約一覧取得）
@@ -895,13 +903,13 @@ export class AppointPage extends BasePage {
    *
    * @param timeFrom 開始時刻（HH:MM形式）
    * @param durationMin 所要時間（分）
-   * @param menuName メニュー名（指定時はuse_columnで担当者を絞り込み）
+   * @param menu メニュー情報（指定時はuse_columnで担当者を絞り込み）
    * @returns 空いている担当者のcolumn_no、または見つからない場合はnull
    */
   private async findAvailableStaff(
     timeFrom: string,
     durationMin: number,
-    menuName?: string
+    menu?: MenuInfo
   ): Promise<number | null> {
     // 予約日のデータを取得
     const dayData = await this.getReserveDayData();
@@ -913,17 +921,12 @@ export class AppointPage extends BasePage {
     );
 
     // メニューが指定されている場合、対応可能な担当者で絞り込む
-    if (menuName) {
-      const treatmentItems = await this.getTreatmentItems();
-      const matchedItem = treatmentItems.find(
-        (item) => item.title === menuName || item.title.includes(menuName)
+    const matchedItem = await this.findTreatmentItem(menu);
+    if (matchedItem && matchedItem.use_column.length > 0) {
+      const allowedColumnIds = new Set(matchedItem.use_column);
+      availableColumns = availableColumns.filter(
+        (col) => allowedColumnIds.has(col.id)
       );
-      if (matchedItem && matchedItem.use_column.length > 0) {
-        const allowedColumnIds = new Set(matchedItem.use_column);
-        availableColumns = availableColumns.filter(
-          (col) => allowedColumnIds.has(col.id)
-        );
-      }
     }
 
     // 必要な連続枠数を計算（15分刻み）
@@ -974,8 +977,6 @@ export class AppointPage extends BasePage {
         const staffInfo = reservation.staff;
         const preference = staffInfo?.preference || 'any';
 
-        const menuName = reservation.menu?.menu_name || undefined;
-
         if (preference === 'specific' && staffInfo?.staff_id) {
           // specific指定で staff_id がある場合はそれを使用
           columnNo = parseInt(staffInfo.staff_id, 10);
@@ -985,7 +986,7 @@ export class AppointPage extends BasePage {
           const availableStaffId = await this.findAvailableStaff(
             reservation.slot.start_at,
             durationMin,
-            menuName
+            reservation.menu
           );
 
           if (!availableStaffId) {
@@ -1011,7 +1012,7 @@ export class AppointPage extends BasePage {
           columnNo,
           customerName: reservation.customer.name,
           patientId: reservation.customer.customer_id || undefined,
-          menuName: reservation.menu?.menu_name || undefined,
+          menu: reservation.menu,
           customerPhone: reservation.customer.phone || undefined,
         });
 
@@ -1040,7 +1041,7 @@ export class AppointPage extends BasePage {
           date: reservation.slot.date,
           time: reservation.slot.start_at,
           customerPhone: reservation.customer.phone,
-          menuName: reservation.menu?.menu_name || undefined,
+          menu: reservation.menu,
         });
 
         if ('error' in result) {
@@ -1219,33 +1220,24 @@ export class AppointPage extends BasePage {
    * @param params.date 予約日（YYYY-MM-DD形式）
    * @param params.time 開始時刻（HH:MM形式）
    * @param params.customerPhone 顧客電話番号（予約特定用）
-   * @param params.menuName 新しいメニュー名（メモに設定）
+   * @param params.menu 新しいメニュー情報（メモに設定）
    * @returns 更新結果
    */
   async updateReservation(params: {
     date: string;
     time: string;
     customerPhone: string;
-    menuName?: string;
+    menu?: MenuInfo;
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, time, customerPhone, menuName } = params;
+    const { date, time, customerPhone, menu } = params;
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
 
-    // メニュー名からcolor、treatment_timeを取得（メニューが指定されている場合）
-    let menuColor: string | undefined;
-    let menuTreatmentTime: number | undefined;
-    if (menuName) {
-      const treatmentItems = await this.getTreatmentItems();
-      const matchedItem = treatmentItems.find(
-        (item) => item.title === menuName || item.title.includes(menuName)
-      );
-      if (matchedItem) {
-        menuColor = matchedItem.color;
-        menuTreatmentTime = matchedItem.treatment_time;
-      }
-    }
+    // メニューからcolor、treatment_timeを取得
+    const matchedItem = await this.findTreatmentItem(menu);
+    const menuColor = matchedItem?.color;
+    const menuTreatmentTime = matchedItem?.treatment_time;
 
     // 2. 予約を見つける
     const found = await this.findReservationByPhoneAndTime(date, time, customerPhone);
@@ -1311,7 +1303,7 @@ export class AppointPage extends BasePage {
           reserveEdit.form.time_to = timeTo;
         }
       },
-      { menuName, customerPhone, menuColor, timeTo: calculatedTimeTo }
+      { menuName: menu?.menu_name, customerPhone, menuColor, timeTo: calculatedTimeTo }
     );
 
     // 7. 更新APIのレスポンスを監視

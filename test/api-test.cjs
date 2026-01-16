@@ -60,8 +60,8 @@ const LOGIN_ID = process.env.RPA_LOGIN_KEY;
 const LOGIN_PASSWORD = process.env.RPA_LOGIN_PASSWORD;
 
 // テストデータ
-const TEST_DATE = getTestDate(); // 120日後
-const TEST_TIME = '15:00';
+const TEST_DATE = getTestDate(); // 120日後くらい
+const TEST_TIME = ((new Date().getUTCHours() + 9) % 24) > 12 ? '15:00' : '10:30';
 const TEST_CUSTOMER_NAME = 'テスト テスト';
 const TEST_CUSTOMER_PHONE = '09020787562';
 const TEST_MENU_NAME = '治療の続きをしたい';

@@ -537,6 +537,8 @@ type ReservationCreateBody = {
   customer_phone: string;
   /** メニュー名 - オプション */
   menu_name?: string;
+  /** 外部メニューID - オプション */
+  external_menu_id?: string;
 }
 
 app.post('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationCreateBody>, res: Response) => {
@@ -550,7 +552,7 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
     return;
   }
 
-  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name } = req.body;
+  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name, external_menu_id } = req.body;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   if (!date || !time || !customer_name || !customer_phone) {
@@ -596,7 +598,7 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
           // duration_min: durationMinutes,
         },
         customer: { customer_id: String(customer_id  || ''), name: customer_name, phone: customer_phone },
-        menu: { menu_id: '', external_menu_id: '', menu_name: menu_name || '' },
+        menu: { menu_id: '', external_menu_id: external_menu_id || '', menu_name: menu_name || '' },
         staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
       }] satisfies ReservationRequest[];
 
