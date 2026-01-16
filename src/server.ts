@@ -23,13 +23,13 @@ import dayjs from 'dayjs';
 import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import { Mutex } from 'async-mutex';
-import { ReservationRequest, ScreenshotManager } from '@smartcall/rpa-sdk';
+import { ScreenshotManager } from '@smartcall/rpa-sdk';
 import {
   BrowserSessionManager,
   type Credentials,
   type SessionState,
 } from './lib/BrowserSessionManager.js';
-import { AppointPage } from './pages/AppointPage.js';
+import { type ReservationRequest, AppointPage } from './pages/AppointPage.js';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -593,17 +593,17 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
       await appointPage.navigate(BASE_URL);
 
       // 予約を作成
-      // const durationMinutes = duration_min || 30;
-      // const startTime = dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm');
-      // const endTime = startTime.add(durationMinutes, 'minute');
+      const durationMinutes = duration_min;
+      const startTime = dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm');
+      const endTime = durationMinutes ? startTime.add(durationMinutes, 'minute') : undefined;
       const reservations = [{
         reservation_id: `create_${Date.now()}`,
         operation: 'create' as const,
         slot: {
           date,
           start_at: time,
-          // end_at: endTime.format('HH:mm'),
-          // duration_min: durationMinutes,
+          end_at: endTime?.format('HH:mm'),
+          duration_min: durationMinutes,
         },
         customer: { customer_id: String(customer_id  || ''), name: customer_name, phone: customer_phone },
         menu: { menu_id: '', external_menu_id: external_menu_id || '', menu_name: menu_name || '' },
@@ -670,6 +670,12 @@ type ReservationUpdateBody = {
   customer_phone: string;
   /** メニュー名 - オプション */
   menu_name?: string;
+  /** 外部メニューID - オプション */
+  external_menu_id?: string;
+  /** 変更後の希望日（YYYY-MM-DD形式） - オプション */
+  desired_date?: string;
+  /** 変更後の希望時刻（HH:MM形式） - オプション */
+  desired_time?: string;
 }
 
 app.put('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationUpdateBody>, res: Response) => {
@@ -683,7 +689,7 @@ app.put('/reservations', async (req: Request<ParamsDictionary, unknown, Reservat
     return;
   }
 
-  const { date, time, customer_name, customer_phone, menu_name } = req.body;
+  const { date, time, customer_name, customer_phone, menu_name, external_menu_id, desired_date, desired_time } = req.body;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   // customer_nameはオプション（音声認識の精度問題で不要に）
@@ -720,11 +726,20 @@ app.put('/reservations', async (req: Request<ParamsDictionary, unknown, Reservat
       const reservations = [{
         reservation_id: `update_${Date.now()}`,
         operation: 'update' as const,
-        slot: { date, start_at: time, end_at: '', duration_min: 0 },
+        slot: {
+          date,
+          start_at: time,
+          end_at: '',
+          duration_min: 0,
+          desired: {
+            date: desired_date,
+            time: desired_time,
+          },
+        },
         customer: { name: customer_name || '', phone: customer_phone },
-        menu: { menu_id: '', external_menu_id: '', menu_name: menu_name || '' },
+        menu: { menu_id: '', external_menu_id: external_menu_id || '', menu_name: menu_name || '' },
         staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
-      }];
+      }] satisfies ReservationRequest[];
 
       const results = await appointPage.processReservations(reservations);
       const processResult = results[0];

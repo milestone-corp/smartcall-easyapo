@@ -446,7 +446,7 @@ export type ReservationApiResponse = {
   /** データ（通常null） */
   data: null;
   /** エラーメッセージ */
-  message: Record<string, string[]> | null;
+  message: string | Record<string, string[]> | null;
   /** 確認メッセージ（診療時間外等の警告がある場合） */
   confirmation?: string;
 }
@@ -615,6 +615,10 @@ export type ReserveEdit = VueComponent & {
    * 予約キャンセルダイアログを表示
    */
   clickReserveCancel(): void;
+  /**
+   * 予約更新を実行
+   */
+  clickExec(): void;
 }
 
 /**

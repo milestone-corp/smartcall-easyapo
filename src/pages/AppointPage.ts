@@ -42,6 +42,15 @@ dayjs.extend(customParseFormat);
  */
 export type ReservationRequest = Omit<ReservationRequestBase, 'operation'> & {
   operation: ReservationRequestBase['operation'] | 'delete' | 'update';
+  slot: ReservationRequestBase['slot'] & {
+    /** 変更後希望日時 */
+    desired?: {
+        /** 希望日（YYYY-MM-DD形式） */
+        date?: string,
+        /** 希望時刻（HH:MM形式 */
+        time?: string,
+    },
+  }
 };
 
 /**
@@ -1019,7 +1028,7 @@ export class AppointPage extends BasePage {
               result: {
                 status: 'failed',
                 error_code: 'NO_AVAILABLE_STAFF',
-                error_message: `指定時間枠（${reservation.slot.date} ${reservation.slot.start_at}）に空いている担当者がいません`,
+                error_message: `指定時間枠（${reservation.slot.date} ${reservation.slot.start_at} ～ ${durationMin}分 ）に空いている担当者がいません`,
               },
             });
             continue;
@@ -1063,6 +1072,7 @@ export class AppointPage extends BasePage {
         const result = await this.updateReservation({
           date: reservation.slot.date,
           time: reservation.slot.start_at,
+          desired: reservation.slot.desired,
           customerPhone: reservation.customer.phone,
           menu: reservation.menu,
         });
@@ -1230,11 +1240,12 @@ export class AppointPage extends BasePage {
   }
 
   /**
-   * 予約を更新する（メモのみ）
+   * 予約を更新する
    */
   async updateReservation({
     date,
     time,
+    desired,
     customerPhone,
     menu,
   }: {
@@ -1242,6 +1253,11 @@ export class AppointPage extends BasePage {
     date: string;
     /** 開始時刻（HH:MM形式） */
     time: string;
+    /** 変更後の希望日時 */
+    desired?: {
+      date?: string;
+      time?: string;
+    };
     /** 顧客電話番号（予約特定用） */
     customerPhone: string;
     /** 新しいメニュー情報（メモに設定） */
@@ -1312,13 +1328,69 @@ export class AppointPage extends BasePage {
         reserveEdit.form.color = params.menuColor;
       }
 
-      // 終了時間を更新
-      if (params.timeTo) {
+      // 予約日を更新
+      if (params.desiredDate) {
+        reserveEdit.form.reservation_date = params.desiredDate;
+      }
+
+      // 開始時間を更新（終了時刻も連動してずらす）
+      if (params.desiredTime) {
+        // 時刻文字列をパースするヘルパー
+        const parseTime = (time: string): [number, number] => {
+          const parts = time.split(':');
+          const h = parseInt(parts[0] ?? '', 10);
+          const m = parseInt(parts[1] ?? '', 10);
+          return [Number.isNaN(h) ? 0 : h, Number.isNaN(m) ? 0 : m];
+        };
+
+        // 現在の開始・終了時刻から所要時間を計算
+        const [fromH, fromM] = parseTime(reserveEdit.form.time_from);
+        const [toH, toM] = parseTime(reserveEdit.form.time_to);
+        const durationMinutes = (toH * 60 + toM) - (fromH * 60 + fromM);
+
+        // 新しい開始時刻を設定
+        reserveEdit.form.time_from = params.desiredTime;
+
+        // 新しい終了時刻を計算（所要時間を維持）
+        const [newFromH, newFromM] = parseTime(params.desiredTime);
+        const newToMinutes = newFromH * 60 + newFromM + (durationMinutes > 0 ? durationMinutes : 45);
+        const newToH = Math.floor(newToMinutes / 60);
+        const newToM = newToMinutes % 60;
+        reserveEdit.form.time_to = `${String(newToH).padStart(2, '0')}:${String(newToM).padStart(2, '0')}`;
+      }
+
+      // 終了時間を更新（メニュー変更による所要時間変更の場合）
+      if (params.timeTo && !params.desiredTime) {
         reserveEdit.form.time_to = params.timeTo;
       }
-    }, { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo });
+    }, { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo, desiredDate: desired?.date, desiredTime: desired?.time });
 
-    // 7. 更新APIのレスポンスを監視
+    // 5. メニューの担当者対応可否をチェック、対応不可なら別の担当者を探す
+    if (matchedItem?.use_column?.length) {
+      const allowedColumnIds = new Set(matchedItem.use_column);
+      if (!allowedColumnIds.has(found.columnNo)) {
+        // 現在の担当者では対応不可。同一日時で空いている対応可能な担当者を探す
+        const durationMin = menuTreatmentTime ?? 45;
+        const availableStaffId = await this.findAvailableStaff(time, durationMin, menu);
+
+        if (availableStaffId && allowedColumnIds.has(availableStaffId)) {
+          // 対応可能な担当者が見つかった → 担当者を変更
+          await reserveEditHandle?.evaluate((reserveEdit, newColumnNo) => {
+            if (reserveEdit) {
+              reserveEdit.form.column_no = newColumnNo;
+            }
+          }, availableStaffId);
+        } else {
+          // 対応可能な担当者がいない → エラー
+          await reserveEditHandle?.evaluate(reserveEdit => reserveEdit?.clickClose());
+          return {
+            error: `メニュー「${matchedItem.title}」は現在の担当者では対応できません。同一時間帯に空いている対応可能な担当者もいません`,
+          };
+        }
+      }
+    }
+
+    // 6. 更新APIのレスポンスを監視
     const postResponsePromise = this.page.waitForResponse(
       (response) => {
         const url = response.url();
@@ -1328,20 +1400,30 @@ export class AppointPage extends BasePage {
     );
 
     // 「更新」ボタンをクリック
-    const updateButton = await this.page.$('.alert-wrapper .contentfooter button.btn-primary');
-    if (!updateButton) {
-      return { error: '更新ボタンが見つかりません' };
-    }
-    await updateButton.click();
+    await reserveEditHandle?.evaluate((reserveEdit) => reserveEdit?.clickExec());
 
-    // 8. POSTレスポンスを確認
+    // 7. POSTレスポンスを確認
     const postResponse = await postResponsePromise;
     const postResponseData = await postResponse.json() as ReservationApiResponse;
 
+    // confirmationがある場合は失敗（診療時間外など）
+    if (postResponseData.confirmation) {
+      const confirmationMessages = JSON.parse(postResponseData.confirmation) as string[];
+      const errorMessage = confirmationMessages.join(' ');
+      console.error(`[AppointPage] 予約更新失敗（確認メッセージ）: ${errorMessage}`);
+
+      // ページをリロードしてダイアログを閉じる
+      await this.page.reload();
+      await this.waitForLoading();
+
+      return { error: errorMessage };
+    }
+
+    // resultがfalseの場合は失敗
     if (!postResponseData.result) {
       let errorMessage = '予約更新に失敗しました';
       if (postResponseData.message) {
-        const messages = Object.values(postResponseData.message).flat();
+        const messages = typeof postResponseData.message === 'string' ? [postResponseData.message] : Object.values(postResponseData.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
       console.error(`[AppointPage] 予約更新失敗: ${errorMessage}`);
@@ -1437,7 +1519,7 @@ export class AppointPage extends BasePage {
     }, {
       circumstanceType,
       cancelType: isDelete ? undefined : AppointPage.CANCEL_TYPE.TEL,
-    }) ?? 'CancelAddコンポーネントが見つかりません';
+    });
     if (error) {
       return { error };
     }
