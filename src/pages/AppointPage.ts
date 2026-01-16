@@ -340,18 +340,17 @@ export class AppointPage extends BasePage {
 
   /**
    * 指定日付の空き枠を取得
-   *
-   * @param params.dateFrom 開始日 (YYYY-MM-DD)
-   * @param params.dateTo 終了日 (YYYY-MM-DD)
-   * @param params.resources 対象リソース名の配列（指定した場合、このリソースのみを対象とする）
-   * @param params.duration 所要時間（分）。指定した場合、同一担当者で連続して確保できる枠のみを返す
-   * @param params.menu メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整）
    */
   async getAvailableSlots({ dateFrom, dateTo, resources, duration, menu }: {
+    /** 開始日 (YYYY-MM-DD) */
     dateFrom: string;
+    /** 終了日 (YYYY-MM-DD) */
     dateTo: string;
+    /** 対象リソース名の配列（指定した場合、このリソースのみを対象とする） */
     resources?: string[];
+    /** 所要時間（分）。指定した場合、同一担当者で連続して確保できる枠のみを返す */
     duration?: number;
+    /** メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整） */
     menu?: MenuInfo;
   }): Promise<SlotInfo[]> {
     // メニューから診療メニュー情報を取得
@@ -694,30 +693,37 @@ export class AppointPage extends BasePage {
 
   /**
    * 予約を作成する
-   *
-   * @param params.date 予約日（YYYY-MM-DD形式）
-   * @param params.timeFrom 開始時刻（HH:MM形式）
-   * @param params.timeTo 終了時刻（HH:MM形式）。未指定の場合はduration_minから計算
-   * @param params.durationMin 所要時間（分）。既定値は45分、2ヶ月以内の再診は30分
-   * @param params.columnNo カラム番号（担当者ID）
-   * @param params.customerName 顧客名（予約名として使用）
-   * @param params.patientId 患者ID（既存患者の場合）
-   * @param params.menu 診療メニュー情報（予約内容として選択）
-   * @param params.customerPhone 顧客電話番号
-   * @returns 作成された予約ID、または失敗時はエラー
    */
-  async createReservation(params: {
+  async createReservation({
+    date,
+    timeFrom,
+    timeTo,
+    durationMin,
+    columnNo,
+    customerName,
+    patientId,
+    menu,
+    customerPhone,
+  }: {
+    /** 予約日（YYYY-MM-DD形式） */
     date: string;
+    /** 開始時刻（HH:MM形式） */
     timeFrom: string;
+    /** 終了時刻（HH:MM形式）。未指定の場合はduration_minから計算 */
     timeTo?: string;
+    /** 所要時間（分）。既定値は45分、2ヶ月以内の再診は30分 */
     durationMin?: number;
+    /** カラム番号（担当者ID） */
     columnNo: number;
+    /** 顧客名（予約名として使用） */
     customerName: string;
+    /** 患者ID（既存患者の場合） */
     patientId?: string;
+    /** 診療メニュー情報（予約内容として選択） */
     menu?: MenuInfo;
+    /** 顧客電話番号 */
     customerPhone?: string;
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, timeFrom, timeTo, durationMin, columnNo, customerName, patientId, menu, customerPhone } = params;
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
@@ -1243,20 +1249,22 @@ export class AppointPage extends BasePage {
 
   /**
    * 予約を更新する（メモのみ）
-   *
-   * @param params.date 予約日（YYYY-MM-DD形式）
-   * @param params.time 開始時刻（HH:MM形式）
-   * @param params.customerPhone 顧客電話番号（予約特定用）
-   * @param params.menu 新しいメニュー情報（メモに設定）
-   * @returns 更新結果
    */
-  async updateReservation(params: {
+  async updateReservation({
+    date,
+    time,
+    customerPhone,
+    menu,
+  }: {
+    /** 予約日（YYYY-MM-DD形式） */
     date: string;
+    /** 開始時刻（HH:MM形式） */
     time: string;
+    /** 顧客電話番号（予約特定用） */
     customerPhone: string;
+    /** 新しいメニュー情報（メモに設定） */
     menu?: MenuInfo;
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, time, customerPhone, menu } = params;
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
@@ -1389,20 +1397,22 @@ export class AppointPage extends BasePage {
 
   /**
    * 予約をキャンセルまたは削除する（共通処理）
-   *
-   * @param params.date 予約日（YYYY-MM-DD形式）
-   * @param params.time 開始時刻（HH:MM形式）
-   * @param params.customerPhone 顧客電話番号（予約特定用）
-   * @param params.circumstanceType キャンセル/削除種別（1: キャンセル, 99: 削除）
-   * @returns 処理結果
    */
-  private async cancelOrDeleteReservation(params: {
+  private async cancelOrDeleteReservation({
+    date,
+    time,
+    customerPhone,
+    circumstanceType,
+  }: {
+    /** 予約日（YYYY-MM-DD形式） */
     date: string;
+    /** 開始時刻（HH:MM形式） */
     time: string;
+    /** 顧客電話番号（予約特定用） */
     customerPhone: string;
+    /** キャンセル/削除種別（1: キャンセル, 99: 削除） */
     circumstanceType: typeof AppointPage.CIRCUMSTANCE_TYPE[keyof typeof AppointPage.CIRCUMSTANCE_TYPE];
   }): Promise<{ reservationId: string } | { error: string }> {
-    const { date, time, customerPhone, circumstanceType } = params;
     const isDelete = circumstanceType === AppointPage.CIRCUMSTANCE_TYPE.DELETE;
     const operationName = isDelete ? '削除' : 'キャンセル';
 
@@ -1492,15 +1502,13 @@ export class AppointPage extends BasePage {
 
   /**
    * 予約をキャンセルする
-   *
-   * @param params.date 予約日（YYYY-MM-DD形式）
-   * @param params.time 開始時刻（HH:MM形式）
-   * @param params.customerPhone 顧客電話番号（予約特定用）
-   * @returns キャンセル結果
    */
   async cancelReservation(params: {
+    /** 予約日（YYYY-MM-DD形式） */
     date: string;
+    /** 開始時刻（HH:MM形式） */
     time: string;
+    /** 顧客電話番号（予約特定用） */
     customerPhone: string;
   }): Promise<{ reservationId: string } | { error: string }> {
     return this.cancelOrDeleteReservation({
@@ -1511,15 +1519,13 @@ export class AppointPage extends BasePage {
 
   /**
    * 予約を削除する
-   *
-   * @param params.date 予約日（YYYY-MM-DD形式）
-   * @param params.time 開始時刻（HH:MM形式）
-   * @param params.customerPhone 顧客電話番号（予約特定用）
-   * @returns 削除結果
    */
   async deleteReservation(params: {
+    /** 予約日（YYYY-MM-DD形式） */
     date: string;
+    /** 開始時刻（HH:MM形式） */
     time: string;
+    /** 顧客電話番号（予約特定用） */
     customerPhone: string;
   }): Promise<{ reservationId: string } | { error: string }> {
     return this.cancelOrDeleteReservation({
