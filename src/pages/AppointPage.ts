@@ -29,6 +29,7 @@ import type {
   ReservationApiResponse,
   ReservationsListResponse,
   CancelAdd,
+  ClosedDayCalendar,
 } from '../types/easyapo.d.ts';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
@@ -164,6 +165,7 @@ export class AppointPage extends BasePage {
     reserve_rows: ReserveRow[];
     column_rows: ColumnRow[];
     time_rows: TimeRow[];
+    closed_days: ClosedDayCalendar[];
     start_hour: number;
     start_minute: number;
     end_hour: number;
@@ -179,6 +181,7 @@ export class AppointPage extends BasePage {
           reserve_rows: appoint.reserve_rows,
           column_rows: appoint.column_rows,
           time_rows: appoint.time_rows,
+          closed_days: appoint.closed_days,
           start_hour: appoint.start_hour,
           start_minute: appoint.start_minute,
           end_hour: appoint.end_hour,
@@ -186,6 +189,13 @@ export class AppointPage extends BasePage {
         };
       }
     );
+  }
+
+  /**
+   * 指定日が休診日かどうかを判定
+   */
+  private isClosedDay(dateStr: string, closedDays: ClosedDayCalendar[]): boolean {
+    return closedDays.some((cal) => cal.calendar[dateStr] != null);
   }
 
   /**
@@ -376,6 +386,8 @@ export class AppointPage extends BasePage {
         ? Math.max(duration, matchedItem.treatment_time)
         : matchedItem.treatment_time;
     }
+    // 不明の場合 45分を規定とする
+    effectiveDuration ??= 45
 
     const slots: SlotInfo[] = [];
     const startDate = dayjs(dateFrom);
@@ -389,6 +401,12 @@ export class AppointPage extends BasePage {
       const dayData = await this.getReserveDayData();
 
       if (dayData) {
+        // 休診日はスキップ
+        if (this.isClosedDay(dateStr, dayData.closed_days)) {
+          currentDate = currentDate.add(1, 'day');
+          continue;
+        }
+
         const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, effectiveResources, effectiveDuration);
         slots.push(...daySlots);
       }

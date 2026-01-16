@@ -245,6 +245,8 @@ type SlotsQuery = Record<string, string | undefined> & {
   resources?: string;
   /** 所要時間（分）。指定した場合、同一担当者で連続して確保できる枠のみを返す */
   duration?: string;
+  /** 外部メニューID - オプション */
+  external_menu_id?: string;
   /** メニュー名 - オプション */
   menu_name?: string;
 }
@@ -266,7 +268,10 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
   const resources = resourcesParam ? resourcesParam.split(',').map(r => r.trim()) : undefined;
   const durationParam = req.query.duration;
   const duration = durationParam ? parseInt(durationParam, 10) : undefined;
-  const menu = req.query.menu_name ? { menu_name: req.query.menu_name } : undefined;
+  const menu = (req.query.external_menu_id || req.query.menu_name) ? {
+    external_menu_id: req.query.external_menu_id,
+    menu_name: req.query.menu_name || '',
+  } : undefined;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   try {

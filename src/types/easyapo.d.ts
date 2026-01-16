@@ -343,6 +343,16 @@ export type Candidate = {
 }
 
 /**
+ * 休診日カレンダー情報
+ */
+export type ClosedDayCalendar = {
+  /** カレンダータイプ（1: 定休日, 2: 臨時休診など） */
+  calendar_type: number;
+  /** 日付ごとの休診フラグ（キー: YYYY-MM-DD, 値: nullでなければ休診） */
+  calendar: Record<string, number | null>;
+}
+
+/**
  * 予約日コンポーネント（Vue）
  */
 export type ReserveDay = VueComponent & {
@@ -352,6 +362,8 @@ export type ReserveDay = VueComponent & {
   column_rows: ColumnRow[];
   /** 予約可能時間枠一覧 */
   time_rows: TimeRow[];
+  /** 休診日カレンダー一覧 */
+  closed_days: ClosedDayCalendar[];
   /** 診療開始時（0-23） */
   start_hour: number;
   /** 診療開始分（0-59） */
