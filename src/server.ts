@@ -245,6 +245,8 @@ type SlotsQuery = Record<string, string | undefined> & {
   resources?: string;
   /** 所要時間（分）。指定した場合、同一担当者で連続して確保できる枠のみを返す */
   duration?: string;
+  /** メニュー名 - オプション */
+  menu_name?: string;
 }
 
 app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQuery>, res: Response) => {
@@ -264,6 +266,7 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
   const resources = resourcesParam ? resourcesParam.split(',').map(r => r.trim()) : undefined;
   const durationParam = req.query.duration;
   const duration = durationParam ? parseInt(durationParam, 10) : undefined;
+  const menu = req.query.menu_name ? { menu_name: req.query.menu_name } : undefined;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   try {
@@ -287,7 +290,7 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
       await appointPage.navigate(BASE_URL);
 
       // 空き枠を取得
-      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources, duration });
+      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources, duration, menu });
 
       // テストモードの場合はスクリーンショットを取得
       let screenshotBase64: string | undefined;

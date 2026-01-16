@@ -345,13 +345,39 @@ export class AppointPage extends BasePage {
    * @param params.dateTo 終了日 (YYYY-MM-DD)
    * @param params.resources 対象リソース名の配列（指定した場合、このリソースのみを対象とする）
    * @param params.duration 所要時間（分）。指定した場合、同一担当者で連続して確保できる枠のみを返す
+   * @param params.menu メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整）
    */
-  async getAvailableSlots({ dateFrom, dateTo, resources, duration }: {
+  async getAvailableSlots({ dateFrom, dateTo, resources, duration, menu }: {
     dateFrom: string;
     dateTo: string;
     resources?: string[];
     duration?: number;
+    menu?: MenuInfo;
   }): Promise<SlotInfo[]> {
+    // メニューから診療メニュー情報を取得
+    const matchedItem = await this.findTreatmentItem(menu);
+
+    // resourcesの決定: 両方指定されていれば積集合、片方のみなら指定された方
+    let effectiveResources = resources;
+    if (matchedItem?.resources?.length) {
+      if (resources?.length) {
+        // 積集合（AND条件）
+        const menuResourceSet = new Set(matchedItem.resources);
+        effectiveResources = resources.filter((r) => menuResourceSet.has(r));
+      } else {
+        // resourcesが未指定ならメニューのresourcesを使用
+        effectiveResources = matchedItem.resources;
+      }
+    }
+
+    // durationの決定: 両方指定されていれば長い方、片方のみなら指定された方
+    let effectiveDuration = duration;
+    if (matchedItem?.treatment_time) {
+      effectiveDuration = duration
+        ? Math.max(duration, matchedItem.treatment_time)
+        : matchedItem.treatment_time;
+    }
+
     const slots: SlotInfo[] = [];
     const startDate = dayjs(dateFrom);
     const endDate = dayjs(dateTo);
@@ -364,7 +390,7 @@ export class AppointPage extends BasePage {
       const dayData = await this.getReserveDayData();
 
       if (dayData) {
-        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, resources, duration);
+        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, effectiveResources, effectiveDuration);
         slots.push(...daySlots);
       }
 
@@ -660,9 +686,10 @@ export class AppointPage extends BasePage {
       return undefined;
     }
     const treatmentItems = await this.getTreatmentItems();
-    return treatmentItems.find(
-      (item) => String(item.id) === menu.external_menu_id || item.title === menu.menu_name || item.title.includes(menu.menu_name!)
-    );
+    return (
+      menu.external_menu_id && treatmentItems.find((item) => String(item.id) === String(menu.external_menu_id)) ||
+      treatmentItems.find((item) => item.title.includes(menu.menu_name)
+    ));
   }
 
   /**
@@ -677,7 +704,7 @@ export class AppointPage extends BasePage {
    * @param params.patientId 患者ID（既存患者の場合）
    * @param params.menu 診療メニュー情報（予約内容として選択）
    * @param params.customerPhone 顧客電話番号
-   * @returns 作成された予約ID、または失敗時はnull
+   * @returns 作成された予約ID、または失敗時はエラー
    */
   async createReservation(params: {
     date: string;
@@ -811,7 +838,7 @@ export class AppointPage extends BasePage {
           }
         }
       },
-      { customerName, menuColor, menuName: menu?.menu_name, customerPhone }
+      { customerName, menuColor, menuName: matchedItem?.title || menu?.menu_name, customerPhone }
     );
 
     // 5. 予約APIのレスポンスを監視（POST: 作成、GET: 予約一覧取得）
@@ -1303,7 +1330,7 @@ export class AppointPage extends BasePage {
           reserveEdit.form.time_to = timeTo;
         }
       },
-      { menuName: menu?.menu_name, customerPhone, menuColor, timeTo: calculatedTimeTo }
+      { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo }
     );
 
     // 7. 更新APIのレスポンスを監視
@@ -1392,11 +1419,13 @@ export class AppointPage extends BasePage {
     await this.openReserveEditDialog(found.reservationId);
 
     // 4. 「予約をキャンセル」ボタンをクリック
-    const cancelTriggerButton = await this.page.$('.alert-wrapper .contentfooter button.btn-dark');
-    if (!cancelTriggerButton) {
-      return { error: '予約をキャンセルボタンが見つかりません' };
-    }
-    await cancelTriggerButton.click();
+    await this.page.evaluate(() => {
+      const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveEdit }>('*'))
+        .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveEdit'));
+      const reserveEdit = el?.__vue__;
+      if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
+      reserveEdit.clickReserveCancel();
+    });
 
     // キャンセルダイアログが表示されるまで待機
     await this.page.waitForSelector('.alert-wrapper .alert-dlList');
