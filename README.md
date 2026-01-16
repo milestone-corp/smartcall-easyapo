@@ -187,7 +187,7 @@ npm run start:persistent
 
 ### PUT /reservations
 
-予約を更新（メニュー変更など）
+予約を更新（メニュー変更、日時変更など）
 
 **リクエストボディ:**
 ```json
@@ -195,16 +195,27 @@ npm run start:persistent
   "date": "2025-12-28",
   "time": "09:00",
   "customer_phone": "09012345678",
-  "menu_name": "虫歯治療"
+  "menu_name": "虫歯治療",
+  "external_menu_id": "100001",
+  "desired_date": "2025-12-29",
+  "desired_time": "10:00"
 }
 ```
 
 | パラメータ | 必須 | 説明 |
 |------------|------|------|
-| `date` | Yes | 予約日（YYYY-MM-DD） |
-| `time` | Yes | 予約時刻（HH:MM） |
+| `date` | Yes | 予約日（YYYY-MM-DD）- 予約の特定に使用 |
+| `time` | Yes | 予約時刻（HH:MM）- 予約の特定に使用 |
 | `customer_phone` | Yes | 顧客電話番号（予約の特定に使用） |
 | `menu_name` | No | 更新後のメニュー名 |
+| `external_menu_id` | No | 更新後のメニューID |
+| `desired_date` | No | 変更後の希望日（YYYY-MM-DD） |
+| `desired_time` | No | 変更後の希望時刻（HH:MM） |
+
+**注意事項:**
+- `desired_time`を指定すると、終了時刻は自動的に所要時間を維持して計算されます
+- メニュー変更時、現在の担当者が対応不可の場合は対応可能な担当者に自動変更されます
+- 診療時間外などの制約に違反する場合はエラーが返されます
 
 **レスポンス:**
 ```json
