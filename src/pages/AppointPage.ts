@@ -10,7 +10,7 @@ import {
   type ScreenshotManager,
   type MenuInfo,
 } from '@smartcall/rpa-sdk';
-import type { Page } from 'playwright';
+import type { Page, JSHandle } from 'playwright';
 import type {
   SideMain,
   ReserveDay,
@@ -30,6 +30,7 @@ import type {
   ReservationsListResponse,
   CancelAdd,
   ClosedDayCalendar,
+  VueComponent,
 } from '../types/easyapo.d.ts';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
@@ -120,6 +121,33 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * Vueコンポーネントの参照を取得（using宣言で自動dispose）
+   *
+   * @param componentName コンポーネント名（例: 'ReserveDay', 'SideMain'）
+   * @returns VueコンポーネントのJSHandle（AsyncDisposable）、見つからない場合はnull
+   *
+   * @example
+   * await using reserveDay = await this.getVueComponent('ReserveDay');
+   * await reserveDay?.evaluate((comp) => comp?.reserve_rows);
+   */
+  private async getVueComponent(componentName: 'SideMain'): Promise<JSHandle<SideMain> | null>;
+  private async getVueComponent(componentName: 'ReserveDay'): Promise<JSHandle<ReserveDay> | null>;
+  private async getVueComponent(componentName: 'ReserveEdit'): Promise<JSHandle<ReserveEdit> | null>;
+  private async getVueComponent(componentName: 'ReserveAdd'): Promise<JSHandle<ReserveAdd> | null>;
+  private async getVueComponent(componentName: 'CancelAdd'): Promise<JSHandle<CancelAdd> | null>;
+  private async getVueComponent(componentName: 'PatientList'): Promise<JSHandle<PatientList> | null>;
+  private async getVueComponent<T extends VueComponent>(componentName: string): Promise<JSHandle<T> | null>;
+  private async getVueComponent(componentName: string): Promise<JSHandle<VueComponent> | null> {
+    return await this.page.evaluateHandle(
+      (name) =>
+        Array.from(document.querySelectorAll<HTMLElement & { __vue__: VueComponent }>('*'))
+          .find(el => el?.__vue__?.$vnode?.tag?.endsWith(name))
+          ?.__vue__,
+      componentName
+    ) as JSHandle<VueComponent>;
+  }
+
+  /**
    * アポイント管理台帳ページに遷移
    */
   async navigate(baseUrl: string): Promise<void> {
@@ -141,16 +169,10 @@ export class AppointPage extends BasePage {
     );
 
     // カレンダーコンポーネントのclickDayを呼び出す
-    await this.page.evaluate(
-      (dateId) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: SideMain }>('*')).find(el => el?.__vue__?.$vnode?.tag?.endsWith('SideMain'));
-        const calendar = el?.__vue__;
-        if (calendar) {
-          calendar.clickDay({ id: dateId });
-        }
-      },
-      dateStr
-    );
+    {
+      await using sideMain = await this.getVueComponent('SideMain');
+      await sideMain?.evaluate((calendar, dateId) => calendar?.clickDay({ id: dateId }), dateStr);
+    }
 
     // APIレスポンスを待機
     await reservationsResponsePromise;
@@ -171,24 +193,20 @@ export class AppointPage extends BasePage {
     end_hour: number;
     end_minute: number;
   } | null> {
-    return await this.page.evaluate(
-      () => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-        const appoint = el?.__vue__;
-        if (!appoint) return null;
-        return {
-          reserve_rows: appoint.reserve_rows,
-          column_rows: appoint.column_rows,
-          time_rows: appoint.time_rows,
-          closed_days: appoint.closed_days,
-          start_hour: appoint.start_hour,
-          start_minute: appoint.start_minute,
-          end_hour: appoint.end_hour,
-          end_minute: appoint.end_minute,
-        };
-      }
-    );
+    await using reserveDay = await this.getVueComponent('ReserveDay');
+    return await reserveDay?.evaluate((appoint) => {
+      if (!appoint) return null;
+      return {
+        reserve_rows: appoint.reserve_rows,
+        column_rows: appoint.column_rows,
+        time_rows: appoint.time_rows,
+        closed_days: appoint.closed_days,
+        start_hour: appoint.start_hour,
+        start_minute: appoint.start_minute,
+        end_hour: appoint.end_hour,
+        end_minute: appoint.end_minute,
+      };
+    }) ?? null;
   }
 
   /**
@@ -423,10 +441,8 @@ export class AppointPage extends BasePage {
    * @returns 診療メニュー一覧（所要時間、処置可能担当者を含む）
    */
   async getTreatmentItems(): Promise<TreatmentItem[]> {
-    const result = await this.page.evaluate(async () => {
-      const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-        .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-      const reserveDay = el?.__vue__;
+    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+    const result = await reserveDayHandle?.evaluate(async (reserveDay) => {
       if (!reserveDay) return null;
 
       const apiUrl = reserveDay.$store.state.api.get_treatment_items;
@@ -456,42 +472,32 @@ export class AppointPage extends BasePage {
    * 患者詳細を取得（予約履歴を含む）
    */
   private async getPatientDetail(patientId: number): Promise<PatientDetailResponse | null> {
-    return await this.page.evaluate(
-      async (id) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-        const reserveDay = el?.__vue__;
-        if (!reserveDay) return null;
+    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+    return await reserveDayHandle?.evaluate(async (reserveDay, id) => {
+      if (!reserveDay) return null;
 
-        const response = await reserveDay.get<PatientDetailResponse>(
-          `/patients/${id}`,
-          { id, original: true }
-        );
-        return response?.data ?? null;
-      },
-      patientId
-    );
+      const response = await reserveDay.get<PatientDetailResponse>(
+        `/patients/${id}`,
+        { id, original: true }
+      );
+      return response?.data ?? null;
+    }, patientId) ?? null;
   }
 
   /**
    * 予約詳細を取得
    */
   private async getReservationDetail(reservationId: number): Promise<ReservationDetailResponse | null> {
-    return await this.page.evaluate(
-      async (id) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-        const reserveDay = el?.__vue__;
-        if (!reserveDay) return null;
+    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+    return await reserveDayHandle?.evaluate(async (reserveDay, id) => {
+      if (!reserveDay) return null;
 
-        const response = await reserveDay.get<ReservationDetailResponse>(
-          `/reservations/${id}`,
-          { id, original: true }
-        );
-        return response?.data ?? null;
-      },
-      reservationId
-    );
+      const response = await reserveDay.get<ReservationDetailResponse>(
+        `/reservations/${id}`,
+        { id, original: true }
+      );
+      return response?.data ?? null;
+    }, reservationId) ?? null;
   }
 
   /**
@@ -517,17 +523,15 @@ export class AppointPage extends BasePage {
     );
 
     // SideMainで患者検索を実行
-    await this.page.evaluate(
-      (phone) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: SideMain }>('*')).find(el => el?.__vue__?.$vnode?.tag?.endsWith('SideMain'));
-        const sideMain = el?.__vue__;
-        if (sideMain) {
-          sideMain.s_q = phone;
-          sideMain.clickSearch();
+    {
+      await using sideMain = await this.getVueComponent('SideMain');
+      await sideMain?.evaluate((comp, phone) => {
+        if (comp) {
+          comp.s_q = phone;
+          comp.clickSearch();
         }
-      },
-      customerPhone
-    );
+      }, customerPhone);
+    }
 
     // 患者検索APIのレスポンスを取得
     const patientsResponse = await patientsResponsePromise;
@@ -535,11 +539,8 @@ export class AppointPage extends BasePage {
 
     // 患者が見つからない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
     if (!patientsData.result || !patientsData.data?.patients?.length) {
-      await this.page.evaluate(() => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: PatientList }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('PatientList'));
-        el?.__vue__?.clickClose();
-      });
+      await using patientList = await this.getVueComponent('PatientList');
+      await patientList?.evaluate((comp) => comp?.clickClose());
       return await this.searchReservationsByMemo(dateFrom, dateTo, customerPhone);
     }
 
@@ -550,11 +551,8 @@ export class AppointPage extends BasePage {
 
     // 電話番号が一致する患者がいない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
     if (matchedPatients.length === 0) {
-      await this.page.evaluate(() => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: PatientList }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('PatientList'));
-        el?.__vue__?.clickClose();
-      });
+      await using patientList = await this.getVueComponent('PatientList');
+      await patientList?.evaluate((comp) => comp?.clickClose());
       return await this.searchReservationsByMemo(dateFrom, dateTo, customerPhone);
     }
 
@@ -626,21 +624,16 @@ export class AppointPage extends BasePage {
       const currentDate = startDate.add(i, 'day').format('YYYY-MM-DD');
 
       // /reservations APIで指定日の予約を取得
-      const apiResult = await this.page.evaluate(
-        async ({ date }) => {
-          const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-            .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-          const reserveDay = el?.__vue__;
-          if (!reserveDay) return null;
+      await using reserveDay = await this.getVueComponent('ReserveDay');
+      const apiResult = await reserveDay?.evaluate(async (reserveDay, date) => {
+        if (!reserveDay) return null;
 
-          const response = await reserveDay.get<ReservationsListResponse>(
-            '/reservations',
-            { from: date, days: 1 }
-          );
-          return response?.data ?? null;
-        },
-        { date: currentDate }
-      );
+        const response = await reserveDay.get<ReservationsListResponse>(
+          '/reservations',
+          { from: date, days: 1 }
+        );
+        return response?.data ?? null;
+      }, currentDate) ?? null;
 
       if (!apiResult?.result || !apiResult.data?.reservations) {
         continue;
@@ -679,14 +672,8 @@ export class AppointPage extends BasePage {
     // 結果がある場合、一番最後の日付を読み込み
     if (results.length > 0) {
       const lastDate = results.reduce((latest, r) => r.date > latest ? r.date : latest, results[0].date);
-      await this.page.evaluate(
-        ({ date }) => {
-          const calendar = Array.from(document.querySelectorAll<HTMLElement & { __vue__: SideMain }>('*'))
-            .find(el => el?.__vue__?.$vnode?.tag?.endsWith('SideMain'))?.__vue__;
-          calendar?.clickDay({ id: date });
-        },
-        { date: lastDate }
-      );
+      await using sideMain = await this.getVueComponent('SideMain');
+      await sideMain?.evaluate((calendar, date) => calendar?.clickDay({ id: date }), lastDate);
     }
 
     return results;
@@ -758,40 +745,37 @@ export class AppointPage extends BasePage {
       .format('HH:mm');
 
     // 2. 予約作成ダイアログを開く
-    await this.page.evaluate(
-      ({ column_no, reservation_date, time_from, time_to }) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-        const reserveDay = el?.__vue__;
+    {
+      await using reserveDay = await this.getVueComponent('ReserveDay');
+      await reserveDay?.evaluate((reserveDay, params) => {
         if (!reserveDay) throw new Error('ReserveDayコンポーネントが見つかりません');
 
         reserveDay.$store.commit('openReserveAdd', {
-          column_no,
-          reservation_date,
-          time_from,
-          time_to,
+          column_no: params.column_no,
+          reservation_date: params.reservation_date,
+          time_from: params.time_from,
+          time_to: params.time_to,
         });
-      },
-      {
+      }, {
         column_no: columnNo,
         reservation_date: date,
         time_from: timeFrom,
         time_to: calculatedTimeTo,
-      }
-    );
+      });
+    }
 
     // ダイアログが表示されるまで待機
     await this.page.waitForSelector('.alert-wrapper .alert h2');
 
     // 3. candidateがアクティブな場合はリセット
-    await this.page.evaluate(() => {
-      const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-        .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-      const reserveDay = el?.__vue__;
-      if (reserveDay?.candidate?.is_active) {
-        reserveDay.$store.commit('resetCandidate');
-      }
-    });
+    {
+      await using reserveDay = await this.getVueComponent('ReserveDay');
+      await reserveDay?.evaluate((reserveDay) => {
+        if (reserveDay?.candidate?.is_active) {
+          reserveDay.$store.commit('resetCandidate');
+        }
+      });
+    }
 
     // 4. ReserveAddコンポーネントを取得してフォームに入力
     // 患者ID入力（既存患者の場合）
@@ -802,17 +786,12 @@ export class AppointPage extends BasePage {
       );
 
       // ReserveAddコンポーネントで患者番号を設定してgetPatient()を呼び出し
-      await this.page.evaluate(
-        ({ patientId }) => {
-          const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveAdd }>('*'))
-            .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveAdd'));
-          const reserveAdd = el?.__vue__;
-          if (!reserveAdd) throw new Error('ReserveAddコンポーネントが見つかりません');
-          reserveAdd.form.patient_number = patientId;
-          reserveAdd.getPatient();
-        },
-        { patientId }
-      );
+      await using reserveAddHandle = await this.getVueComponent('ReserveAdd');
+      await reserveAddHandle?.evaluate((reserveAdd, patientId) => {
+        if (!reserveAdd) throw new Error('ReserveAddコンポーネントが見つかりません');
+        reserveAdd.form.patient_number = patientId;
+        reserveAdd.getPatient();
+      }, patientId);
 
       // 患者検索APIのレスポンスを確認
       const patientSearchResponse = await patientSearchPromise;
@@ -828,42 +807,35 @@ export class AppointPage extends BasePage {
         }
 
         // 予約作成ダイアログを閉じる（ReserveAdd.clickClose()を使用）
-        await this.page.evaluate(() => {
-          const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveAdd }>('*'))
-            .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveAdd'));
-          el?.__vue__?.clickClose();
-        });
+        await reserveAddHandle?.evaluate((reserveAdd) => reserveAdd?.clickClose());
 
         return { error: `患者ID「${patientId}」が見つかりません` };
       }
     }
 
     // 予約名（顧客名）、表示色、メモをReserveAddコンポーネントで設定
-    await this.page.evaluate(
-      ({ customerName, menuColor, menuName, customerPhone }) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveAdd }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveAdd'));
-        const reserveAdd = el?.__vue__;
+    {
+      await using reserveAddHandle = await this.getVueComponent('ReserveAdd');
+      await reserveAddHandle?.evaluate((reserveAdd, params) => {
         if (!reserveAdd) throw new Error('ReserveAddコンポーネントが見つかりません');
 
         // 予約名（顧客名）を入力
-        reserveAdd.form.patient_name = customerName;
+        reserveAdd.form.patient_name = params.customerName;
 
         // 表示色を設定
-        if (menuColor) {
-          reserveAdd.form.color = menuColor;
+        if (params.menuColor) {
+          reserveAdd.form.color = params.menuColor;
         }
 
         // 予約メモにメニュー名を入力
-        if (menuName) {
+        if (params.menuName) {
           reserveAdd.addMemo();
           if (reserveAdd.form.memo.length > 0) {
-            reserveAdd.form.memo[0].memo = `【SmartCall予約】 症状:[${menuName}]、tel:[${customerPhone || ''}]`;
+            reserveAdd.form.memo[0].memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone || ''}]`;
           }
         }
-      },
-      { customerName, menuColor, menuName: matchedItem?.title || menu?.menu_name, customerPhone }
-    );
+      }, { customerName, menuColor, menuName: matchedItem?.title || menu?.menu_name, customerPhone });
+    }
 
     // 5. 予約APIのレスポンスを監視（POST: 作成、GET: 予約一覧取得）
     const postResponsePromise = this.page.waitForResponse(
@@ -1192,21 +1164,16 @@ export class AppointPage extends BasePage {
     customerPhone: string
   ): Promise<{ reservationId: string; columnNo: number } | null> {
     // /reservations APIで指定日の予約を取得
-    const result = await this.page.evaluate(
-      async ({ date }) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-        const reserveDay = el?.__vue__;
-        if (!reserveDay) return null;
+    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+    const result = await reserveDayHandle?.evaluate(async (reserveDay, date) => {
+      if (!reserveDay) return null;
 
-        const response = await reserveDay.get<ReservationsListResponse>(
-          '/reservations',
-          { from: date, days: 1 }
-        );
-        return response?.data ?? null;
-      },
-      { date }
-    );
+      const response = await reserveDay.get<ReservationsListResponse>(
+        '/reservations',
+        { from: date, days: 1 }
+      );
+      return response?.data ?? null;
+    }, date) ?? null;
 
     if (!result?.result || !result.data?.reservations) {
       return null;
@@ -1249,16 +1216,13 @@ export class AppointPage extends BasePage {
    */
   private async openReserveEditDialog(reservationId: string): Promise<void> {
     // 予約編集ダイアログを開く
-    await this.page.evaluate(
-      (id) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveDay & { openReserveEdit(id: number): void } }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveDay'));
-        const reserveDay = el?.__vue__;
+    {
+      await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+      await reserveDayHandle?.evaluate((reserveDay, id) => {
         if (!reserveDay) throw new Error('ReserveDayコンポーネントが見つかりません');
         reserveDay.openReserveEdit(parseInt(id, 10));
-      },
-      reservationId
-    );
+      }, reservationId);
+    }
 
     // ダイアログが表示されるまで待機
     await this.page.waitForSelector('.alert-wrapper .alert h2');
@@ -1307,57 +1271,52 @@ export class AppointPage extends BasePage {
       ? dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm').add(menuTreatmentTime, 'minute').format('HH:mm')
       : null;
 
-    await this.page.evaluate(
-      async ({ menuName, customerPhone, menuColor, timeTo }) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveEdit }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveEdit'));
-        const reserveEdit = el?.__vue__;
-        if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
+    await using reserveEditHandle = await this.getVueComponent('ReserveEdit');
+    await reserveEditHandle?.evaluate(async (reserveEdit, params) => {
+      if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
 
-        // 編集対象の読み込み完了を待機
-        await new Promise<void>(res => {
-          if (reserveEdit.is_loaded) {
-            res();
-            return;
-          } else {
-            const test = () => {
-              if (reserveEdit?.is_loaded) {
-                res();
-              } else {
-                setTimeout(test, 10);
-              }
+      // 編集対象の読み込み完了を待機
+      await new Promise<void>(res => {
+        if (reserveEdit.is_loaded) {
+          res();
+          return;
+        } else {
+          const test = () => {
+            if (reserveEdit?.is_loaded) {
+              res();
+            } else {
+              setTimeout(test, 10);
             }
-            test();
           }
-        });
-
-        // メモを更新
-        if (menuName) {
-          const memoItem = reserveEdit.form.memo?.find(item => item.memo.includes('【SmartCall予約】'))
-          if (memoItem) {
-            // 既存のメモを更新
-            memoItem.memo = `【SmartCall予約】 症状:[${menuName}]、tel:[${customerPhone}]`;
-          } else {
-            // メモがない場合は追加
-            reserveEdit.form.memo.push({
-              id: 1,
-              memo: `【SmartCall予約】 症状:[${menuName}]、tel:[${customerPhone}]`,
-            });
-          }
+          test();
         }
+      });
 
-        // 表示色を更新
-        if (menuColor) {
-          reserveEdit.form.color = menuColor;
+      // メモを更新
+      if (params.menuName) {
+        const memoItem = reserveEdit.form.memo?.find(item => item.memo.includes('【SmartCall予約】'))
+        if (memoItem) {
+          // 既存のメモを更新
+          memoItem.memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`;
+        } else {
+          // メモがない場合は追加
+          reserveEdit.form.memo.push({
+            id: 1,
+            memo: `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`,
+          });
         }
+      }
 
-        // 終了時間を更新
-        if (timeTo) {
-          reserveEdit.form.time_to = timeTo;
-        }
-      },
-      { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo }
-    );
+      // 表示色を更新
+      if (params.menuColor) {
+        reserveEdit.form.color = params.menuColor;
+      }
+
+      // 終了時間を更新
+      if (params.timeTo) {
+        reserveEdit.form.time_to = params.timeTo;
+      }
+    }, { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo });
 
     // 7. 更新APIのレスポンスを監視
     const postResponsePromise = this.page.waitForResponse(
@@ -1447,42 +1406,38 @@ export class AppointPage extends BasePage {
     await this.openReserveEditDialog(found.reservationId);
 
     // 4. 「予約をキャンセル」ボタンをクリック
-    await this.page.evaluate(() => {
-      const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: ReserveEdit }>('*'))
-        .find(el => el?.__vue__?.$vnode?.tag?.endsWith('ReserveEdit'));
-      const reserveEdit = el?.__vue__;
-      if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
-      reserveEdit.clickReserveCancel();
-    });
+    {
+      await using reserveEditHandle = await this.getVueComponent('ReserveEdit');
+      await reserveEditHandle?.evaluate((reserveEdit) => {
+        if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
+        reserveEdit.clickReserveCancel();
+      });
+    }
 
     // キャンセルダイアログが表示されるまで待機
     await this.page.waitForSelector('.alert-wrapper .alert-dlList');
 
     // 5. CancelAddコンポーネントのformを直接操作
-    const error = await this.page.evaluate(
-      ({ circumstanceType, cancelType }) => {
-        const el = Array.from(document.querySelectorAll<HTMLElement & { __vue__: CancelAdd }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith('CancelAdd'));
-        const cancelAdd = el?.__vue__;
-        if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
+    await using cancelAddHandle = await this.getVueComponent('CancelAdd');
+    const error = await cancelAddHandle?.evaluate((cancelAdd, params) => {
+      if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
 
-        cancelAdd.form.circumstance_type = circumstanceType;
-        if (cancelType !== undefined) {
-          cancelAdd.form.cancel_type = cancelType;
-        }
-
-        const submitButton = el.querySelector<HTMLButtonElement>('.btn-primary');
-        if (!submitButton) {
-          return '登録ボタンが見つかりません';
-        }
-        submitButton.click();
-        return null;
-      },
-      {
-        circumstanceType,
-        cancelType: isDelete ? undefined : AppointPage.CANCEL_TYPE.TEL,
+      cancelAdd.form.circumstance_type = params.circumstanceType;
+      if (params.cancelType !== undefined) {
+        cancelAdd.form.cancel_type = params.cancelType;
       }
-    );
+
+      // $elを使ってDOM要素にアクセス
+      const submitButton = cancelAdd.$el?.querySelector<HTMLButtonElement>('.btn-primary');
+      if (!submitButton) {
+        return '登録ボタンが見つかりません';
+      }
+      submitButton.click();
+      return null;
+    }, {
+      circumstanceType,
+      cancelType: isDelete ? undefined : AppointPage.CANCEL_TYPE.TEL,
+    }) ?? 'CancelAddコンポーネントが見つかりません';
     if (error) {
       return { error };
     }

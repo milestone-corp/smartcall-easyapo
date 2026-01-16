@@ -8,6 +8,8 @@ export type VueComponent = {
   $vnode?: {
     tag: string;
   };
+  /** VueコンポーネントのルートDOM要素 */
+  $el?: HTMLElement;
 }
 
 /**
@@ -385,6 +387,12 @@ export type ReserveDay = VueComponent & {
   };
   /** API通信メソッド（Axiosレスポンス形式） */
   get<T>(url: string, params: Record<string, unknown>): Promise<AxiosLikeResponse<T>>;
+  /**
+   * 予約編集ダイアログを開く
+   *
+   * @param id 予約ID
+   */
+  openReserveEdit(id: number): void;
 }
 
 /**
