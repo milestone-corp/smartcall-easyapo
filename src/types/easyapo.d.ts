@@ -435,6 +435,10 @@ export type CancelAddForm = {
 export type CancelAdd = VueComponent & {
   /** キャンセル登録フォーム */
   form: CancelAddForm;
+  /**
+   * キャンセル/削除を実行
+   */
+  clickExec(): void;
 }
 
 /**

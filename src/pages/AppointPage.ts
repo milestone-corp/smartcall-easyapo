@@ -1501,28 +1501,17 @@ export class AppointPage extends BasePage {
 
     // 5. CancelAddコンポーネントのformを直接操作
     await using cancelAddHandle = await this.getVueComponent('CancelAdd');
-    const error = await cancelAddHandle?.evaluate((cancelAdd, params) => {
+    await cancelAddHandle?.evaluate((cancelAdd, params) => {
       if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
 
       cancelAdd.form.circumstance_type = params.circumstanceType;
       if (params.cancelType !== undefined) {
         cancelAdd.form.cancel_type = params.cancelType;
       }
-
-      // $elを使ってDOM要素にアクセス
-      const submitButton = cancelAdd.$el?.querySelector<HTMLButtonElement>('.btn-primary');
-      if (!submitButton) {
-        return '登録ボタンが見つかりません';
-      }
-      submitButton.click();
-      return null;
     }, {
       circumstanceType,
       cancelType: isDelete ? undefined : AppointPage.CANCEL_TYPE.TEL,
     });
-    if (error) {
-      return { error };
-    }
 
     // 6. APIレスポンスを監視
     const postResponsePromise = this.page.waitForResponse(
@@ -1532,14 +1521,17 @@ export class AppointPage extends BasePage {
       }
     );
 
-    // 7. POSTレスポンスを確認
+    // 7. キャンセル/削除を実行
+    await cancelAddHandle?.evaluate((cancelAdd) => cancelAdd?.clickExec());
+
+    // 8. POSTレスポンスを確認
     const postResponse = await postResponsePromise;
     const postResponseData = await postResponse.json() as ReservationApiResponse;
 
     if (!postResponseData.result) {
       let errorMessage = `予約${operationName}に失敗しました`;
       if (postResponseData.message) {
-        const messages = Object.values(postResponseData.message).flat();
+        const messages = typeof postResponseData.message === 'string' ? [postResponseData.message] : Object.values(postResponseData.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
       console.error(`[AppointPage] 予約${operationName}失敗: ${errorMessage}`);
