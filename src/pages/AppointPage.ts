@@ -168,6 +168,14 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * ページをリロードする
+   */
+  async reload(): Promise<void> {
+    const url = new URL(this.page.url());
+    await this.navigate(`${url.origin}/${url.pathname}`.replace(/\/$/,''));
+  }
+
+  /**
    * 指定日付の予約データを読み込む（カレンダーで日付を選択）
    */
   private async selectDate(dateStr: string): Promise<void> {
@@ -180,7 +188,10 @@ export class AppointPage extends BasePage {
     // カレンダーコンポーネントのclickDayを呼び出す
     {
       await using sideMain = await this.getVueComponent('SideMain');
-      await sideMain?.evaluate((calendar, dateId) => calendar?.clickDay({ id: dateId }), dateStr);
+      await sideMain?.evaluate((calendar, dateId) => {
+        if (!calendar) throw new Error('SideMainコンポーネントが見つかりません');
+        calendar.clickDay({ id: dateId })
+      }, dateStr);
     }
 
     // APIレスポンスを待機
@@ -872,7 +883,7 @@ export class AppointPage extends BasePage {
       console.error(`[AppointPage] 予約作成失敗（確認メッセージ）: ${errorMessage}`);
 
       // ページをリロードしてダイアログを閉じる
-      await this.page.reload();
+      await this.reload();
       await this.waitForLoading();
 
       return { error: errorMessage };
@@ -888,7 +899,7 @@ export class AppointPage extends BasePage {
       console.error(`[AppointPage] 予約作成失敗: ${errorMessage}`);
 
       // ページをリロードしてダイアログを閉じる
-      await this.page.reload();
+      await this.reload();
       await this.waitForLoading();
 
       return { error: errorMessage };
@@ -1288,24 +1299,19 @@ export class AppointPage extends BasePage {
       : null;
 
     await using reserveEditHandle = await this.getVueComponent('ReserveEdit');
-    await reserveEditHandle?.evaluate(async (reserveEdit, params) => {
+    const updatedFormData = await reserveEditHandle?.evaluate(async (reserveEdit, params) => {
       if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
 
       // 編集対象の読み込み完了を待機
       await new Promise<void>(res => {
-        if (reserveEdit.is_loaded) {
-          res();
-          return;
-        } else {
-          const test = () => {
-            if (reserveEdit?.is_loaded) {
-              res();
-            } else {
-              setTimeout(test, 10);
-            }
+        const checkLoaded = () => {
+          if (reserveEdit.is_loaded) {
+            res();
+          } else {
+            setTimeout(checkLoaded, 100);
           }
-          test();
-        }
+        };
+        checkLoaded();
       });
 
       // メモを更新
@@ -1363,6 +1369,13 @@ export class AppointPage extends BasePage {
       if (params.timeTo && !params.desiredTime) {
         reserveEdit.form.time_to = params.timeTo;
       }
+
+      // 更新後のフォーム値を返す（リトライ時に再利用）
+      return {
+        reservationDate: reserveEdit.form.reservation_date,
+        timeFrom: reserveEdit.form.time_from,
+        timeTo: reserveEdit.form.time_to,
+      };
     }, { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo, desiredDate: desired?.date, desiredTime: desired?.time });
 
     // 5. メニューの担当者対応可否をチェック、対応不可なら別の担当者を探す
@@ -1413,7 +1426,7 @@ export class AppointPage extends BasePage {
       console.error(`[AppointPage] 予約更新失敗（確認メッセージ）: ${errorMessage}`);
 
       // ページをリロードしてダイアログを閉じる
-      await this.page.reload();
+      await this.reload();
       await this.waitForLoading();
 
       return { error: errorMessage };
@@ -1426,10 +1439,129 @@ export class AppointPage extends BasePage {
         const messages = typeof postResponseData.message === 'string' ? [postResponseData.message] : Object.values(postResponseData.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
+
+      // エラーメッセージに「別の予約」が含まれている場合、
+      // 日時変更で、別の予約と衝突しているので他の担当者への再割り当てを試行する
+      if (errorMessage.includes('別の予約') && (desired?.date || desired?.time)) {
+        console.debug(`[AppointPage] 別の予約との衝突を検出。他の担当者への再割り当てを試行します`);
+
+        // ページをリロードして再試行
+        await this.reload();
+        await this.waitForLoading();
+
+        // 変更後の日時で空いている担当者を検索
+        const targetDate = desired.date || date;
+        const targetTime = desired.time || time;
+        await this.selectDate(targetDate);
+        await this.waitForLoading();
+
+        const durationMin = menuTreatmentTime ?? 45;
+        const availableStaffId = await this.findAvailableStaff(targetTime, durationMin, menu);
+
+        if (availableStaffId) {
+          // 空いている担当者が見つかった → 再試行
+          console.debug(`[AppointPage] 空き担当者が見つかりました (column_no: ${availableStaffId})。再試行します`);
+
+          // 予約編集ダイアログを再度開く
+          await this.selectDate(date);
+          await this.openReserveEditDialog(found.reservationId);
+          await this.waitForLoading();
+
+          // ReserveEditコンポーネントで担当者を変更して更新
+          // 最初の更新で計算済みのフォーム値を再利用（日時計算の重複を回避）
+          await using retryReserveEditHandle = await this.getVueComponent('ReserveEdit');
+          await retryReserveEditHandle?.evaluate(async (reserveEdit, params) => {
+            if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
+
+            // 編集対象の読み込み完了を待機
+            await new Promise<void>(res => {
+              const checkLoaded = () => {
+                if (reserveEdit.is_loaded) {
+                  res();
+                } else {
+                  setTimeout(checkLoaded, 100);
+                }
+              };
+              checkLoaded();
+            });
+
+            // 担当者を変更
+            reserveEdit.form.column_no = params.newColumnNo;
+
+            // 最初の更新で計算済みのフォーム値をそのまま設定
+            if (params.formData) {
+              reserveEdit.form.reservation_date = params.formData.reservationDate;
+              reserveEdit.form.time_from = params.formData.timeFrom;
+              reserveEdit.form.time_to = params.formData.timeTo;
+            }
+
+            // メニュー変更がある場合はメモと色も更新
+            if (params.menuName) {
+              const memoItem = reserveEdit.form.memo.find(item => item.memo.includes('【SmartCall予約】'));
+              if (memoItem) {
+                memoItem.memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`;
+              } else {
+                reserveEdit.addMemo();
+                const newMemo = reserveEdit.form.memo.at(-1);
+                if (newMemo) {
+                  newMemo.memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`;
+                }
+              }
+            }
+            if (params.menuColor) {
+              reserveEdit.form.color = params.menuColor;
+            }
+          }, {
+            newColumnNo: availableStaffId,
+            formData: updatedFormData,
+            menuName: matchedItem?.title,
+            menuColor,
+            customerPhone,
+          });
+
+          // 再度更新を試行
+          const retryPostResponsePromise = this.page.waitForResponse(
+            (response) => {
+              const url = response.url();
+              return /\/reservations\/\d+$/.test(url) && response.request().method() === 'POST';
+            }
+          );
+
+          await retryReserveEditHandle?.evaluate((reserveEdit) => reserveEdit?.clickExec());
+
+          const retryPostResponse = await retryPostResponsePromise;
+          const retryPostResponseData = await retryPostResponse.json() as ReservationApiResponse;
+
+          if (retryPostResponseData.result) {
+            console.debug(`[AppointPage] 担当者変更による再試行が成功しました`);
+            await this.waitForLoading();
+            return { reservationId: found.reservationId };
+          }
+
+          // 再試行も失敗した場合
+          let retryErrorMessage = '予約更新に失敗しました（再試行後）';
+          if (retryPostResponseData.message) {
+            const messages = typeof retryPostResponseData.message === 'string'
+              ? [retryPostResponseData.message]
+              : Object.values(retryPostResponseData.message).flat();
+            retryErrorMessage = messages.join(' ') || retryErrorMessage;
+          }
+          console.error(`[AppointPage] 予約更新失敗（再試行後）: ${retryErrorMessage}`);
+
+          await this.reload();
+          await this.waitForLoading();
+          return { error: retryErrorMessage };
+        }
+
+        // 空いている担当者が見つからなかった
+        console.error(`[AppointPage] 空き担当者が見つかりませんでした`);
+        return { error: `${errorMessage}（空いている担当者が見つかりませんでした）` };
+      }
+
       console.error(`[AppointPage] 予約更新失敗: ${errorMessage}`);
 
       // ページをリロードしてダイアログを閉じる
-      await this.page.reload();
+      await this.reload();
       await this.waitForLoading();
 
       return { error: errorMessage };
@@ -1536,7 +1668,7 @@ export class AppointPage extends BasePage {
       }
       console.error(`[AppointPage] 予約${operationName}失敗: ${errorMessage}`);
 
-      await this.page.reload();
+      await this.reload();
       await this.waitForLoading();
 
       return { error: errorMessage };

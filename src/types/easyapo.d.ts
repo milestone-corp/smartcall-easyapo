@@ -612,6 +612,12 @@ export type ReserveEdit = VueComponent & {
   /** 編集対象の情報が読み込み完了したか */
   is_loaded: boolean;
   /**
+   * 予約メモを追加
+   *
+   * form.memoに新しいメモ項目を追加する
+   */
+  addMemo(): void;
+  /**
    * 予約編集ダイアログを閉じる
    */
   clickClose(): void;
