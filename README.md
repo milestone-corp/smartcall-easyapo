@@ -105,6 +105,8 @@ npm run start:persistent
 | `date_from` | No | 開始日（YYYY-MM-DD）デフォルト: 本日 |
 | `date_to` | No | 終了日（YYYY-MM-DD）デフォルト: date_fromと同じ |
 
+**注意:** 現在時刻（JST）より過去の時間枠は返却されません。
+
 **レスポンス:**
 ```json
 {
