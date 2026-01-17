@@ -1037,7 +1037,7 @@ export class AppointPage extends BasePage {
               reservation_id: reservation.reservation_id,
               operation: 'create',
               result: {
-                status: 'failed',
+                status: 'conflict',
                 error_code: 'NO_AVAILABLE_STAFF',
                 error_message: `指定時間枠（${reservation.slot.date} ${reservation.slot.start_at} ～ ${durationMin}分 ）に空いている担当者がいません`,
               },
