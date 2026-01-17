@@ -176,6 +176,36 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * 指定テキストを含む要素までスクロール
+   *
+   * @param text 検索するテキスト
+   */
+  private async scrollToText(text: string): Promise<void> {
+    try {
+      await this.page.evaluate((searchText) => {
+        const walker = document.createTreeWalker(
+          document.body,
+          NodeFilter.SHOW_TEXT,
+          null
+        );
+        let node;
+        while ((node = walker.nextNode())) {
+          if (node.textContent?.includes(searchText)) {
+            const element = node.parentElement;
+            if (element) {
+              (element as any).scrollIntoViewIfNeeded?.(true) ||
+                element.scrollIntoView({ block: 'center', behavior: 'instant' });
+            }
+            break;
+          }
+        }
+      }, text);
+    } catch {
+      // スクロールは重要ではないのでエラーは無視
+    }
+  }
+
+  /**
    * 指定日付の予約データを読み込む（カレンダーで日付を選択）
    */
   private async selectDate(dateStr: string): Promise<void> {
@@ -694,6 +724,10 @@ export class AppointPage extends BasePage {
       const lastDate = results.reduce((latest, r) => r.date > latest ? r.date : latest, results[0].date);
       await using sideMain = await this.getVueComponent('SideMain');
       await sideMain?.evaluate((calendar, date) => calendar?.clickDay({ id: date }), lastDate);
+      await this.wait(100);
+      await this.waitForLoading();
+      // 予約枠までスクロール
+      await this.scrollToText(`${results.at(-1)!.time}～`);
     }
 
     return results;
@@ -1166,6 +1200,13 @@ export class AppointPage extends BasePage {
     await this.waitForNavigation();
     await this.waitForLoading();
 
+    if (reservations.length && reservations.at(-1)?.slot?.start_at) {
+      const time = reservations.at(-1)?.slot?.start_at
+      if (time) {
+        await this.scrollToText(`${time}～`);
+      }
+    }
+
     return results;
   }
 
@@ -1223,6 +1264,9 @@ export class AppointPage extends BasePage {
     if (!matched) {
       return null;
     }
+
+    // 予約枠までスクロール
+    await this.scrollToText(`${matched.time_from}～`);
 
     return {
       reservationId: String(matched.id),
