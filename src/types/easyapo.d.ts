@@ -38,6 +38,8 @@ export type SideMain = VueComponent & {
    * @param param.id 日付（YYYY-MM-DD形式、例: '2026-05-26'）
    */
   clickDay(param: { id: string }): void;
+  /** 選択されている日付 */
+  selected_date: Date|undefined;
   /** 検索クエリ文字列 */
   s_q: string;
   /** 患者検索を実行（s_qの値で検索） */

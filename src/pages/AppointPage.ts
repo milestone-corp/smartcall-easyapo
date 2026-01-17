@@ -122,6 +122,20 @@ export class AppointPage extends BasePage {
     this.screenshot = screenshot;
   }
 
+  private static readonly TIMER_LABEL = '[AppointPage]';
+  private static readonly DEBUG_ENABLED = process.env.NODE_DEBUG?.includes('AppointPage') ?? false;
+  private static debugStarted = false;
+
+  /**
+   * 処理ステップのログを出力（時間計測付き）
+   * NODE_DEBUG=AppointPage を設定した場合のみ出力
+   */
+  private step(message: string): void {
+    if (AppointPage.DEBUG_ENABLED) {
+      console.timeLog(AppointPage.TIMER_LABEL, message);
+    }
+  }
+
   /**
    * ローディング表示が消えるまで待機
    */
@@ -160,11 +174,21 @@ export class AppointPage extends BasePage {
    * アポイント管理台帳ページに遷移
    */
   async navigate(baseUrl: string): Promise<void> {
+    if (AppointPage.DEBUG_ENABLED) {
+      if (AppointPage.debugStarted) {
+        console.timeEnd(AppointPage.TIMER_LABEL);
+      }
+      console.time(AppointPage.TIMER_LABEL);
+      AppointPage.debugStarted = true;
+    }
+    this.step('navigate: start');
     await this.goto(`${baseUrl}/`);
+    this.step('navigate: goto complete');
     // メインコンポーネントが表示されるまで待機
     await this.page.waitForSelector('#col-main > div');
     await this.page.waitForSelector('#col-side > div');
     await this.waitForLoading();
+    this.step('navigate: complete');
   }
 
   /**
@@ -209,7 +233,21 @@ export class AppointPage extends BasePage {
    * 指定日付の予約データを読み込む（カレンダーで日付を選択）
    */
   private async selectDate(dateStr: string): Promise<void> {
+    this.step(`selectDate: start (${dateStr})`);
     await this.waitForLoading();
+
+    // 既に同じ日付が選択されている場合はスキップ
+    {
+      await using sideMain = await this.getVueComponent('SideMain');
+      const currentDate = await sideMain?.evaluate((comp) =>
+        comp?.selected_date?.toISOString().split('T')[0]
+      );
+      if (currentDate === dateStr) {
+        this.step(`selectDate: skipped (already selected: ${dateStr})`);
+        return;
+      }
+    }
+
     // 予約データ取得APIのレスポンスを監視
     const reservationsResponsePromise = this.page.waitForResponse(
       (response) => response.url().includes('/reservations?') && response.request().method() === 'GET'
@@ -226,8 +264,10 @@ export class AppointPage extends BasePage {
 
     // APIレスポンスを待機
     await reservationsResponsePromise;
+    this.step(`selectDate: API response received (${dateStr})`);
 
     await this.waitForLoading();
+    this.step(`selectDate: complete (${dateStr})`);
   }
 
   /**
@@ -387,9 +427,16 @@ export class AppointPage extends BasePage {
       (timeRow) => timeRow.time_num >= startTimeNum && timeRow.time_num < endTimeNum
     );
 
+    // 現在日時（JST）より過去の枠を除外するための閾値
+    const nowJst = dayjs().tz('Asia/Tokyo');
+    const nowDateTimeNum = nowJst.format('YYYY-MM-DD HHmm');
+
     // 各時間枠をチェック
     for (let i = 0; i < timeRows.length; i++) {
       const timeRow = timeRows[i];
+
+      // 現在時刻より過去の枠はスキップ
+      if (`${dateStr} ${timeRow.time_num}` < nowDateTimeNum) continue;
 
       // 休憩時間はスキップ
       if (this.isBreakTime(timeRow)) continue;
@@ -431,6 +478,7 @@ export class AppointPage extends BasePage {
     /** メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整） */
     menu?: MenuInfo;
   }): Promise<SlotInfo[]> {
+    this.step(`getAvailableSlots: start (${dateFrom} - ${dateTo})`);
     // メニューから診療メニュー情報を取得
     const matchedItem = await this.findTreatmentItem(menu);
 
@@ -482,6 +530,7 @@ export class AppointPage extends BasePage {
       currentDate = currentDate.add(1, 'day');
     }
 
+    this.step(`getAvailableSlots: complete (${slots.length} slots found)`);
     return slots;
   }
 
@@ -565,6 +614,7 @@ export class AppointPage extends BasePage {
     dateTo: string,
     customerPhone: string
   ): Promise<ReservationSearchResult[]> {
+    this.step(`searchReservationsByPhone: start (${customerPhone}, ${dateFrom} - ${dateTo})`);
     await this.waitForLoading();
 
     // 患者検索APIのレスポンスを監視
@@ -586,6 +636,7 @@ export class AppointPage extends BasePage {
     // 患者検索APIのレスポンスを取得
     const patientsResponse = await patientsResponsePromise;
     const patientsData = await patientsResponse.json() as PatientsSearchResponse;
+    this.step(`searchReservationsByPhone: patient search API response received`);
 
     // 患者が見つからない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
     if (!patientsData.result || !patientsData.data?.patients?.length) {
@@ -643,6 +694,7 @@ export class AppointPage extends BasePage {
       }
     }
 
+    this.step(`searchReservationsByPhone: complete (${results.length} results found)`);
     return results;
   }
 
@@ -783,6 +835,7 @@ export class AppointPage extends BasePage {
     /** 顧客電話番号 */
     customerPhone?: string;
   }): Promise<{ reservationId: string } | { error: string }> {
+    this.step(`createReservation: start (${date} ${timeFrom}, ${customerName})`);
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
@@ -820,6 +873,7 @@ export class AppointPage extends BasePage {
 
     // ダイアログが表示されるまで待機
     await this.page.waitForSelector('.alert-wrapper .alert h2');
+    this.step(`createReservation: dialog opened`);
 
     // 3. candidateがアクティブな場合はリセット
     {
@@ -909,6 +963,7 @@ export class AppointPage extends BasePage {
     // 6. POSTレスポンスを確認
     const postResponse = await postResponsePromise;
     const postResponseData = await postResponse.json() as ReservationApiResponse;
+    this.step(`createReservation: POST response received`);
 
     // confirmationがある場合は失敗（診療時間外など）
     if (postResponseData.confirmation) {
@@ -970,6 +1025,7 @@ export class AppointPage extends BasePage {
 
     await this.waitForLoading();
 
+    this.step(`createReservation: complete (reservationId: ${createdReservation.id})`);
     return { reservationId: String(createdReservation.id) };
   }
 
@@ -1042,9 +1098,11 @@ export class AppointPage extends BasePage {
   async processReservations(
     reservations: ReservationRequest[],
   ): Promise<ReservationResult[]>  {
+    this.step(`processReservations: start (${reservations.length} reservations)`);
     const results: ReservationResult[] = [];
 
     for (const reservation of reservations) {
+      this.step(`processReservations: processing ${reservation.operation} (${reservation.reservation_id})`);
       if (reservation.operation === 'create') {
         // 予約日を読み込む（担当者検索のため）
         await this.selectDate(reservation.slot.date);
@@ -1207,6 +1265,7 @@ export class AppointPage extends BasePage {
       }
     }
 
+    this.step(`processReservations: complete (${results.length} results)`);
     return results;
   }
 
@@ -1318,6 +1377,7 @@ export class AppointPage extends BasePage {
     /** 新しいメニュー情報（メモに設定） */
     menu?: MenuInfo;
   }): Promise<{ reservationId: string } | { error: string }> {
+    this.step(`updateReservation: start (${date} ${time}, ${customerPhone})`);
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
@@ -1332,10 +1392,12 @@ export class AppointPage extends BasePage {
     if (!found) {
       return { error: `予約が見つかりません: ${date} ${time} ${customerPhone}` };
     }
+    this.step(`updateReservation: reservation found (id: ${found.reservationId})`);
 
     // 3. 予約編集ダイアログを開く
     await this.openReserveEditDialog(found.reservationId);
     await this.waitForLoading()
+    this.step(`updateReservation: edit dialog opened`);
 
     // 4. ReserveEditコンポーネントを取得してフォームを更新
     const calculatedTimeTo = menuTreatmentTime
@@ -1462,6 +1524,7 @@ export class AppointPage extends BasePage {
     // 7. POSTレスポンスを確認
     const postResponse = await postResponsePromise;
     const postResponseData = await postResponse.json() as ReservationApiResponse;
+    this.step(`updateReservation: POST response received`);
 
     // confirmationがある場合は失敗（診療時間外など）
     if (postResponseData.confirmation) {
@@ -1613,6 +1676,7 @@ export class AppointPage extends BasePage {
 
     await this.waitForLoading();
 
+    this.step(`updateReservation: complete (reservationId: ${found.reservationId})`);
     return { reservationId: found.reservationId };
   }
 
@@ -1650,6 +1714,7 @@ export class AppointPage extends BasePage {
   }): Promise<{ reservationId: string } | { error: string }> {
     const isDelete = circumstanceType === AppointPage.CIRCUMSTANCE_TYPE.DELETE;
     const operationName = isDelete ? '削除' : 'キャンセル';
+    this.step(`cancelOrDeleteReservation: start ${operationName} (${date} ${time}, ${customerPhone})`);
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
@@ -1659,9 +1724,11 @@ export class AppointPage extends BasePage {
     if (!found) {
       return { error: `予約が見つかりません: ${date} ${time} ${customerPhone}` };
     }
+    this.step(`cancelOrDeleteReservation: reservation found (id: ${found.reservationId})`);
 
     // 3. 予約編集ダイアログを開く
     await this.openReserveEditDialog(found.reservationId);
+    this.step(`cancelOrDeleteReservation: edit dialog opened`);
 
     // 4. 「予約をキャンセル」ボタンをクリック
     {
@@ -1703,6 +1770,7 @@ export class AppointPage extends BasePage {
     // 8. POSTレスポンスを確認
     const postResponse = await postResponsePromise;
     const postResponseData = await postResponse.json() as ReservationApiResponse;
+    this.step(`cancelOrDeleteReservation: POST response received`);
 
     if (!postResponseData.result) {
       let errorMessage = `予約${operationName}に失敗しました`;
@@ -1720,6 +1788,7 @@ export class AppointPage extends BasePage {
 
     await this.waitForLoading();
 
+    this.step(`cancelOrDeleteReservation: complete (reservationId: ${found.reservationId})`);
     return { reservationId: found.reservationId };
   }
 
