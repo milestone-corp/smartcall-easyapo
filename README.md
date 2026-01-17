@@ -73,16 +73,13 @@ npm run start:persistent
 ```json
 {
   "success": true,
-  "treatment_items": [
+  "menu": [
     {
-      "id": 1,
-      "title": "初診",
-      "color": "#FF0000",
-      "treatment_time": 30,
-      "use_column": [1, 2],
-      "pic": null,
-      "order": 1,
-      "resources": ["Dr1", "Dr2"]
+      "external_menu_id": "1",
+      "menu_name": "初診",
+      "duration_min": 30,
+      "resources": ["Dr1", "Dr2"],
+      "resource_ids": [1, 2]
     }
   ],
   "count": 1,
@@ -92,14 +89,11 @@ npm run start:persistent
 
 | フィールド | 説明 |
 |------------|------|
-| `id` | 診療メニューID |
-| `title` | 診療メニュー名 |
-| `color` | 表示色（HEXカラーコード） |
-| `treatment_time` | 所要時間（分） |
-| `use_column` | 対応カラムID一覧 |
-| `pic` | 担当者情報（未使用） |
-| `order` | 表示順序 |
+| `external_menu_id` | 診療メニューID |
+| `menu_name` | 診療メニュー名 |
+| `duration_min` | 所要時間（分） |
 | `resources` | 処置可能な担当者名一覧 |
+| `resource_ids` | 対応カラムID一覧 |
 
 ### GET /slots
 

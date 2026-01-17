@@ -387,10 +387,19 @@ app.get('/menu', async (req: Request, res: Response) => {
       return { treatmentItems, screenshotBase64 };
     }, REQUEST_TIMEOUT_MS);
 
+    // MenuInfoに近い形式に変換
+    const menu = result.treatmentItems.map((item) => ({
+      external_menu_id: item.id ? String(item.id) : undefined,
+      menu_name: item.title,
+      duration_min: item.treatment_time,
+      resources: item.resources,
+      resource_ids: item.use_column,
+    }));
+
     const response: Record<string, unknown> = {
       success: true,
-      treatment_items: result.treatmentItems,
-      count: result.treatmentItems.length,
+      menu,
+      count: menu.length,
       timing: { total_ms: Date.now() - startTime },
     };
 
