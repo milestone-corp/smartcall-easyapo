@@ -1,0 +1,1156 @@
+{
+  "info": {
+    "name": "SmartCall EasyApo RPA API",
+    "description": "歯科予約システム（EasyApo）のRPA自動操作API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-RPA-Login-Id",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{login_id}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "description": "APIサーバーのベースURL"
+    },
+    {
+      "key": "login_id",
+      "value": "",
+      "description": "EasyApo ログインID"
+    },
+    {
+      "key": "login_password",
+      "value": "",
+      "description": "EasyApo パスワード"
+    }
+  ],
+  "item": [
+    {
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "ヘルスチェック",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "サーバーとセッションの状態をチェック。認証不要。"
+      },
+      "response": [
+        {
+          "name": "正常（セッション準備完了）",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"status\": \"ok\",\n  \"session_state\": \"ready\",\n  \"has_credentials\": true\n}"
+        },
+        {
+          "name": "正常（セッション未初期化）",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"status\": \"degraded\",\n  \"session_state\": \"not_initialized\",\n  \"has_credentials\": false\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "詳細ステータス",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/status",
+          "host": ["{{base_url}}"],
+          "path": ["status"]
+        },
+        "description": "セッション情報と設定の詳細を返す。認証不要。"
+      },
+      "response": [
+        {
+          "name": "正常",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/status",
+              "host": ["{{base_url}}"],
+              "path": ["status"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"session\": {\n    \"state\": \"ready\",\n    \"last_activity\": \"2026-01-20T10:30:00.000Z\"\n  },\n  \"config\": {\n    \"keep_alive_interval_ms\": 300000,\n    \"request_timeout_ms\": 60000\n  }\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "空き枠取得",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "url": {
+          "raw": "{{base_url}}/slots?date_from=2026-01-20&date_to=2026-01-20",
+          "host": ["{{base_url}}"],
+          "path": ["slots"],
+          "query": [
+            {"key": "date_from", "value": "2026-01-20", "description": "開始日 (YYYY-MM-DD)。省略時は今日"},
+            {"key": "date_to", "value": "2026-01-20", "description": "終了日 (YYYY-MM-DD)。省略時はdate_from"},
+            {"key": "resources", "value": "", "description": "対象リソース名（カンマ区切り）", "disabled": true},
+            {"key": "duration", "value": "30", "description": "所要時間（分）。指定時は連続確保できる枠のみ", "disabled": true},
+            {"key": "external_menu_id", "value": "", "description": "外部メニューID", "disabled": true},
+            {"key": "menu_name", "value": "", "description": "メニュー名", "disabled": true}
+          ]
+        },
+        "description": "指定条件に合う空き時間枠を検索"
+      },
+      "response": [
+        {
+          "name": "空き枠あり",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/slots?date_from=2026-01-20&date_to=2026-01-20",
+              "host": ["{{base_url}}"],
+              "path": ["slots"],
+              "query": [
+                {"key": "date_from", "value": "2026-01-20"},
+                {"key": "date_to", "value": "2026-01-20"}
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"available_slots\": [\n    {\n      \"date\": \"2026-01-20\",\n      \"start_at\": \"09:00\",\n      \"end_at\": \"09:30\",\n      \"resource_name\": \"Dr.田中\"\n    },\n    {\n      \"date\": \"2026-01-20\",\n      \"start_at\": \"09:30\",\n      \"end_at\": \"10:00\",\n      \"resource_name\": \"Dr.田中\"\n    },\n    {\n      \"date\": \"2026-01-20\",\n      \"start_at\": \"10:30\",\n      \"end_at\": \"11:00\",\n      \"resource_name\": \"Dr.佐藤\"\n    }\n  ],\n  \"count\": 3,\n  \"timing\": {\n    \"total_ms\": 1523\n  }\n}"
+        },
+        {
+          "name": "空き枠なし",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/slots?date_from=2026-01-20&date_to=2026-01-20",
+              "host": ["{{base_url}}"],
+              "path": ["slots"],
+              "query": [
+                {"key": "date_from", "value": "2026-01-20"},
+                {"key": "date_to", "value": "2026-01-20"}
+              ]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"available_slots\": [],\n  \"count\": 0,\n  \"timing\": {\n    \"total_ms\": 892\n  }\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/slots?date_from=2026-01-20",
+              "host": ["{{base_url}}"],
+              "path": ["slots"],
+              "query": [{"key": "date_from", "value": "2026-01-20"}]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        },
+        {
+          "name": "処理エラー",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/slots?date_from=2026-01-20",
+              "host": ["{{base_url}}"],
+              "path": ["slots"],
+              "query": [{"key": "date_from", "value": "2026-01-20"}]
+            }
+          },
+          "status": "Internal Server Error",
+          "code": 500,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Navigation timeout exceeded\",\n  \"code\": \"PROCESSING_ERROR\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "診療メニュー取得",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "url": {
+          "raw": "{{base_url}}/menu",
+          "host": ["{{base_url}}"],
+          "path": ["menu"]
+        },
+        "description": "利用可能な診療メニュー一覧を取得"
+      },
+      "response": [
+        {
+          "name": "成功",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/menu",
+              "host": ["{{base_url}}"],
+              "path": ["menu"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"menu\": [\n    {\n      \"external_menu_id\": \"1\",\n      \"menu_name\": \"定期検診\",\n      \"duration_min\": 30,\n      \"resources\": [\"Dr.田中\", \"Dr.佐藤\"],\n      \"resource_ids\": [\"1\", \"2\"]\n    },\n    {\n      \"external_menu_id\": \"2\",\n      \"menu_name\": \"クリーニング\",\n      \"duration_min\": 45,\n      \"resources\": [\"衛生士A\"],\n      \"resource_ids\": [\"3\"]\n    },\n    {\n      \"external_menu_id\": \"3\",\n      \"menu_name\": \"ホワイトニング\",\n      \"duration_min\": 60,\n      \"resources\": [\"Dr.田中\"],\n      \"resource_ids\": [\"1\"]\n    }\n  ],\n  \"count\": 3,\n  \"timing\": {\n    \"total_ms\": 1102\n  }\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/menu",
+              "host": ["{{base_url}}"],
+              "path": ["menu"]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "予約検索",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "url": {
+          "raw": "{{base_url}}/reservations/search?customer_phone=09012345678",
+          "host": ["{{base_url}}"],
+          "path": ["reservations", "search"],
+          "query": [
+            {"key": "customer_phone", "value": "09012345678", "description": "顧客の電話番号（必須）"},
+            {"key": "date_from", "value": "2026-01-01", "description": "検索開始日 (YYYY-MM-DD)", "disabled": true},
+            {"key": "date_to", "value": "2026-12-31", "description": "検索終了日 (YYYY-MM-DD)", "disabled": true}
+          ]
+        },
+        "description": "指定した電話番号の予約情報を検索"
+      },
+      "response": [
+        {
+          "name": "予約あり",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/reservations/search?customer_phone=09012345678",
+              "host": ["{{base_url}}"],
+              "path": ["reservations", "search"],
+              "query": [{"key": "customer_phone", "value": "09012345678"}]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservations\": [\n    {\n      \"date\": \"2026-01-20\",\n      \"start_at\": \"10:00\",\n      \"end_at\": \"10:30\",\n      \"customer_name\": \"山田太郎\",\n      \"customer_phone\": \"09012345678\",\n      \"resource_name\": \"Dr.田中\",\n      \"memo\": \"定期検診\"\n    },\n    {\n      \"date\": \"2026-02-15\",\n      \"start_at\": \"14:30\",\n      \"end_at\": \"15:15\",\n      \"customer_name\": \"山田太郎\",\n      \"customer_phone\": \"09012345678\",\n      \"resource_name\": \"衛生士A\",\n      \"memo\": \"クリーニング\"\n    }\n  ],\n  \"count\": 2,\n  \"timing\": {\n    \"total_ms\": 2341\n  }\n}"
+        },
+        {
+          "name": "予約なし",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/reservations/search?customer_phone=09099999999",
+              "host": ["{{base_url}}"],
+              "path": ["reservations", "search"],
+              "query": [{"key": "customer_phone", "value": "09099999999"}]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservations\": [],\n  \"count\": 0,\n  \"timing\": {\n    \"total_ms\": 1892\n  }\n}"
+        },
+        {
+          "name": "バリデーションエラー - customer_phone未指定",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/reservations/search",
+              "host": ["{{base_url}}"],
+              "path": ["reservations", "search"]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing required parameter: customer_phone\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/reservations/search?customer_phone=09012345678",
+              "host": ["{{base_url}}"],
+              "path": ["reservations", "search"],
+              "query": [{"key": "customer_phone", "value": "09012345678"}]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "予約作成",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_name\": \"山田太郎\",\n  \"customer_phone\": \"09012345678\",\n  \"menu_name\": \"定期検診\",\n  \"duration_min\": 30\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "url": {
+          "raw": "{{base_url}}/reservations",
+          "host": ["{{base_url}}"],
+          "path": ["reservations"]
+        },
+        "description": "新規予約を作成\n\n**必須フィールド:**\n- date: 予約日 (YYYY-MM-DD)\n- time: 予約時刻 (HH:MM)\n- customer_name: 顧客名\n- customer_phone: 電話番号\n\n**オプション:**\n- duration_min: 所要時間（分）\n- customer_id: 顧客ID\n- menu_name: メニュー名\n- external_menu_id: 外部メニューID"
+      },
+      "response": [
+        {
+          "name": "患者IDあり",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-05-20\",\n  \"time\": \"10:00\",\n  \"customer_id\": \"1\",\n  \"customer_name\": \"山田太郎\",\n  \"customer_phone\": \"09012345678\",\n  \"menu_name\": \"定期検診\",\n  \"duration_min\": 30\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservation_id\": \"create_1705750800000\",\n  \"external_reservation_id\": \"12345\",\n  \"timing\": {\n    \"total_ms\": 3421\n  }\n}"
+        },
+        {
+          "name": "患者IDなし",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-05-20\",\n  \"time\": \"10:00\",\n  \"customer_name\": \"山田太郎\",\n  \"customer_phone\": \"09012345678\",\n  \"menu_name\": \"定期検診\",\n  \"duration_min\": 30\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservation_id\": \"create_1705750800000\",\n  \"external_reservation_id\": \"12345\",\n  \"timing\": {\n    \"total_ms\": 3421\n  }\n}"
+        },
+        {
+          "name": "バリデーションエラー",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing required parameters: date, time, customer_name, customer_phone\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+        },
+        {
+          "name": "空き担当者なし（競合）",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_name\": \"山田太郎\",\n  \"customer_phone\": \"09012345678\",\n  \"menu_name\": \"定期検診\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"reservation_id\": \"create_1705750800000\",\n  \"error\": \"指定された日時に空いている担当者がいません\",\n  \"error_code\": \"NO_AVAILABLE_RESOURCE\",\n  \"timing\": {\n    \"total_ms\": 2156\n  }\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "POST",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_name\": \"山田太郎\",\n  \"customer_phone\": \"09012345678\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "予約更新",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\",\n  \"desired_date\": \"2026-01-21\",\n  \"desired_time\": \"14:00\"\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "url": {
+          "raw": "{{base_url}}/reservations",
+          "host": ["{{base_url}}"],
+          "path": ["reservations"]
+        },
+        "description": "既存予約を更新（日時変更、メニュー変更など）\n\n**必須フィールド:**\n- date: 現在の予約日 (YYYY-MM-DD)\n- time: 現在の予約時刻 (HH:MM)\n- customer_phone: 電話番号\n\n**オプション:**\n- customer_name: 顧客名\n- menu_name: 変更後のメニュー名\n- external_menu_id: 変更後の外部メニューID\n- desired_date: 変更希望日 (YYYY-MM-DD)\n- desired_time: 変更希望時刻 (HH:MM)"
+      },
+      "response": [
+        {
+          "name": "日時変更",
+          "originalRequest": {
+            "method": "PUT",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\",\n  \"desired_date\": \"2026-01-21\",\n  \"desired_time\": \"14:00\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservation_id\": \"update_1705750800000\",\n  \"external_reservation_id\": \"12345\",\n  \"timing\": {\n    \"total_ms\": 4521\n  }\n}"
+        },
+        {
+          "name": "メニュー変更",
+          "originalRequest": {
+            "method": "PUT",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\",\n  \"menu_name\": \"ホワイトニング\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservation_id\": \"update_1705750800000\",\n  \"external_reservation_id\": \"12345\",\n  \"timing\": {\n    \"total_ms\": 3892\n  }\n}"
+        },
+        {
+          "name": "予約が見つからない",
+          "originalRequest": {
+            "method": "PUT",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"15:00\",\n  \"customer_phone\": \"09012345678\",\n  \"desired_date\": \"2026-01-21\",\n  \"desired_time\": \"14:00\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"reservation_id\": \"update_1705750800000\",\n  \"error\": \"指定された条件に一致する予約が見つかりません\",\n  \"error_code\": \"RESERVATION_NOT_FOUND\",\n  \"timing\": {\n    \"total_ms\": 2341\n  }\n}"
+        },
+        {
+          "name": "バリデーションエラー",
+          "originalRequest": {
+            "method": "PUT",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing required parameters: date, time, customer_phone\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "PUT",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\",\n  \"desired_date\": \"2026-01-21\",\n  \"desired_time\": \"14:00\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0008-4000-8000-000000000008",
+      "name": "予約キャンセル",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "Content-Type", "value": "application/json"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\"\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "url": {
+          "raw": "{{base_url}}/reservations",
+          "host": ["{{base_url}}"],
+          "path": ["reservations"],
+          "query": [
+            {"key": "force", "value": "true", "description": "trueの場合は削除扱い、それ以外でキャンセル", "disabled": true}
+          ]
+        },
+        "description": "予約をキャンセル（または削除）\n\n**必須フィールド:**\n- date: 予約日 (YYYY-MM-DD)\n- time: 予約時刻 (HH:MM)\n- customer_phone: 電話番号\n\n**クエリパラメータ:**\n- force=true: 削除扱い（デフォルトはキャンセル）"
+      },
+      "response": [
+        {
+          "name": "キャンセル",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservation_id\": \"cancel_1705750800000\",\n  \"timing\": {\n    \"total_ms\": 2891\n  }\n}"
+        },
+        {
+          "name": "削除（force=true）",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations?force=true",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"],
+              "query": [{"key": "force", "value": "true"}]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"reservation_id\": \"cancel_1705750800000\",\n  \"timing\": {\n    \"total_ms\": 2543\n  }\n}"
+        },
+        {
+          "name": "予約が見つからない",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"15:00\",\n  \"customer_phone\": \"09012345678\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"reservation_id\": \"cancel_1705750800000\",\n  \"error\": \"指定された条件に一致する予約が見つかりません\",\n  \"error_code\": \"RESERVATION_NOT_FOUND\",\n  \"timing\": {\n    \"total_ms\": 2102\n  }\n}"
+        },
+        {
+          "name": "バリデーションエラー",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing required parameters: date, time, customer_phone\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "DELETE",
+            "header": [{"key": "Content-Type", "value": "application/json"}],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"date\": \"2026-01-20\",\n  \"time\": \"10:00\",\n  \"customer_phone\": \"09012345678\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["reservations"]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0009-4000-8000-000000000009",
+      "name": "セッション再起動",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "X-RPA-Test-Mode", "value": "true", "disabled": true}
+        ],
+        "url": {
+          "raw": "{{base_url}}/session/restart",
+          "host": ["{{base_url}}"],
+          "path": ["session", "restart"]
+        },
+        "description": "ブラウザセッションを強制的に再初期化"
+      },
+      "response": [
+        {
+          "name": "成功",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/session/restart",
+              "host": ["{{base_url}}"],
+              "path": ["session", "restart"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"message\": \"Session restarted\",\n  \"screenshot\": null\n}"
+        },
+        {
+          "name": "認証エラー",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/session/restart",
+              "host": ["{{base_url}}"],
+              "path": ["session", "restart"]
+            }
+          },
+          "status": "Unauthorized",
+          "code": 401,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"Missing authentication headers. Required: X-RPA-Login-Id, X-RPA-Login-Password\",\n  \"code\": \"AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0010-4000-8000-000000000010",
+      "name": "ブラウザ情報取得",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+        ],
+        "url": {
+          "raw": "{{base_url}}/debug/browser?screenshot=true",
+          "host": ["{{base_url}}"],
+          "path": ["debug", "browser"],
+          "query": [
+            {"key": "selector", "value": "#txtAppointMemo", "description": "DOMセレクタ", "disabled": true},
+            {"key": "screenshot", "value": "true", "description": "スクリーンショットを含める"},
+            {"key": "html", "value": "true", "description": "HTMLを含める", "disabled": true}
+          ]
+        },
+        "description": "ブラウザの現在の状態をデバッグ。Accept: image/pngヘッダーで画像のみ返す"
+      },
+      "response": [
+        {
+          "name": "成功",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/debug/browser?screenshot=true",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "browser"],
+              "query": [{"key": "screenshot", "value": "true"}]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"url\": \"https://cieasyapo2.ci-medical.com/Appoint/Appoint\",\n  \"title\": \"予約カレンダー\",\n  \"screenshot\": \"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\"\n}"
+        },
+        {
+          "name": "セレクタ指定",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/debug/browser?selector=%23txtAppointMemo",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "browser"],
+              "query": [{"key": "selector", "value": "#txtAppointMemo"}]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"url\": \"https://cieasyapo2.ci-medical.com/Appoint/Appoint\",\n  \"title\": \"予約カレンダー\",\n  \"element\": {\n    \"found\": true,\n    \"selector\": \"#txtAppointMemo\",\n    \"tagName\": \"TEXTAREA\",\n    \"id\": \"txtAppointMemo\",\n    \"className\": \"form-control\",\n    \"value\": \"定期検診\",\n    \"display\": \"block\",\n    \"visibility\": \"visible\",\n    \"isVisible\": true\n  }\n}"
+        },
+        {
+          "name": "セッションなし",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"}
+            ],
+            "url": {
+              "raw": "{{base_url}}/debug/browser",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "browser"]
+            }
+          },
+          "status": "Service Unavailable",
+          "code": 503,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"error\": \"No active session\"\n}"
+        }
+      ]
+    },
+    {
+      "id": "a1b2c3d4-0011-4000-8000-000000000011",
+      "name": "ブラウザ情報取得 (画像のみ)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "Accept", "value": "image/png"}
+        ],
+        "url": {
+          "raw": "{{base_url}}/debug/browser",
+          "host": ["{{base_url}}"],
+          "path": ["debug", "browser"]
+        },
+        "description": "ブラウザのスクリーンショットをPNG画像として取得"
+      }
+    },
+    {
+      "id": "a1b2c3d4-0012-4000-8000-000000000012",
+      "name": "JavaScriptコード実行",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+          {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+          {"key": "Content-Type", "value": "application/json"}
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"script\": \"document.title\"\n}",
+          "options": {"raw": {"language": "json"}}
+        },
+        "url": {
+          "raw": "{{base_url}}/debug/evaluate",
+          "host": ["{{base_url}}"],
+          "path": ["debug", "evaluate"]
+        },
+        "description": "ブラウザコンテキストで任意のJavaScriptを実行"
+      },
+      "response": [
+        {
+          "name": "成功",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": \"document.title\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/debug/evaluate",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "evaluate"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": true,\n  \"result\": \"予約カレンダー\"\n}"
+        },
+        {
+          "name": "スクリプトエラー",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": \"undefinedVariable.property\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/debug/evaluate",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "evaluate"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"success\": false,\n  \"error\": \"ReferenceError: undefinedVariable is not defined\"\n}"
+        },
+        {
+          "name": "バリデーションエラー - script未指定",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/debug/evaluate",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "evaluate"]
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"error\": \"script is required\"\n}"
+        },
+        {
+          "name": "セッションなし",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {"key": "X-RPA-Login-Id", "value": "{{login_id}}"},
+              {"key": "X-RPA-Login-Password", "value": "{{login_password}}"},
+              {"key": "Content-Type", "value": "application/json"}
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"script\": \"document.title\"\n}",
+              "options": {"raw": {"language": "json"}}
+            },
+            "url": {
+              "raw": "{{base_url}}/debug/evaluate",
+              "host": ["{{base_url}}"],
+              "path": ["debug", "evaluate"]
+            }
+          },
+          "status": "Service Unavailable",
+          "code": 503,
+          "_postman_previewlanguage": "json",
+          "header": [{"key": "Content-Type", "value": "application/json"}],
+          "body": "{\n  \"error\": \"No active session\"\n}"
+        }
+      ]
+    }
+  ]
+}

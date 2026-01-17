@@ -1,0 +1,657 @@
+openapi: 3.0.3
+info:
+  title: SmartCall EasyApo RPA API
+  description: 歯科予約システム（EasyApo）のRPA自動操作API
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: ローカル開発サーバー
+
+components:
+  securitySchemes:
+    LoginId:
+      type: apiKey
+      in: header
+      name: X-RPA-Login-Id
+      description: EasyApo ログインID
+    LoginPassword:
+      type: apiKey
+      in: header
+      name: X-RPA-Login-Password
+      description: EasyApo パスワード
+
+  parameters:
+    TestMode:
+      name: X-RPA-Test-Mode
+      in: header
+      description: テストモード（trueの場合、スクリーンショットを撮影）
+      required: false
+      schema:
+        type: string
+        enum: ["true", "false"]
+        default: "false"
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        session:
+          type: string
+          example: active
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        session:
+          type: object
+        config:
+          type: object
+
+    Slot:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+          example: "2026-01-20"
+        time:
+          type: string
+          example: "10:00"
+        resource:
+          type: string
+          example: "Dr.田中"
+        available:
+          type: boolean
+
+    MenuItem:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          example: "定期検診"
+        duration:
+          type: integer
+          example: 30
+        external_menu_id:
+          type: string
+
+    Reservation:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        time:
+          type: string
+        customer_name:
+          type: string
+        customer_phone:
+          type: string
+        menu_name:
+          type: string
+        status:
+          type: string
+
+    CreateReservationRequest:
+      type: object
+      required:
+        - date
+        - time
+        - customer_name
+        - customer_phone
+      properties:
+        date:
+          type: string
+          format: date
+          description: 予約日 (YYYY-MM-DD)
+          example: "2026-01-20"
+        time:
+          type: string
+          description: 予約時刻 (HH:MM)
+          example: "10:00"
+        customer_name:
+          type: string
+          description: 顧客名
+          example: "山田太郎"
+        customer_phone:
+          type: string
+          description: 電話番号
+          example: "09012345678"
+        customer_id:
+          type: string
+          description: 顧客ID（オプション）
+        menu_name:
+          type: string
+          description: メニュー名（オプション）
+          example: "定期検診"
+        external_menu_id:
+          type: string
+          description: 外部メニューID（オプション）
+        duration_min:
+          type: integer
+          description: 所要時間（分）（オプション）
+          example: 30
+
+    UpdateReservationRequest:
+      type: object
+      required:
+        - date
+        - time
+        - customer_phone
+      properties:
+        date:
+          type: string
+          format: date
+          description: 現在の予約日 (YYYY-MM-DD)
+          example: "2026-01-20"
+        time:
+          type: string
+          description: 現在の予約時刻 (HH:MM)
+          example: "10:00"
+        customer_phone:
+          type: string
+          description: 電話番号
+          example: "09012345678"
+        customer_name:
+          type: string
+          description: 顧客名（オプション）
+        menu_name:
+          type: string
+          description: 変更後のメニュー名（オプション）
+        external_menu_id:
+          type: string
+          description: 変更後の外部メニューID（オプション）
+        desired_date:
+          type: string
+          format: date
+          description: 変更希望日 (YYYY-MM-DD)（オプション）
+          example: "2026-01-21"
+        desired_time:
+          type: string
+          description: 変更希望時刻 (HH:MM)（オプション）
+          example: "14:00"
+
+    CancelReservationRequest:
+      type: object
+      required:
+        - date
+        - time
+        - customer_phone
+      properties:
+        date:
+          type: string
+          format: date
+          description: 予約日 (YYYY-MM-DD)
+          example: "2026-01-20"
+        time:
+          type: string
+          description: 予約時刻 (HH:MM)
+          example: "10:00"
+        customer_phone:
+          type: string
+          description: 電話番号
+          example: "09012345678"
+
+    EvaluateRequest:
+      type: object
+      required:
+        - script
+      properties:
+        script:
+          type: string
+          description: 実行するJavaScriptコード
+          example: "document.title"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: ヘルスチェック
+      description: サーバーとセッションの状態をチェック。認証不要。
+      tags:
+        - システム
+      responses:
+        '200':
+          description: 正常
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /status:
+    get:
+      summary: 詳細ステータス
+      description: セッション情報と設定の詳細を返す。認証不要。
+      tags:
+        - システム
+      responses:
+        '200':
+          description: 正常
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /slots:
+    get:
+      summary: 空き枠取得
+      description: 指定条件に合う空き時間枠を検索
+      tags:
+        - 予約
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - $ref: '#/components/parameters/TestMode'
+        - name: date_from
+          in: query
+          description: 開始日 (YYYY-MM-DD)。省略時は今日
+          required: false
+          schema:
+            type: string
+            format: date
+            example: "2026-01-20"
+        - name: date_to
+          in: query
+          description: 終了日 (YYYY-MM-DD)。省略時はdate_from
+          required: false
+          schema:
+            type: string
+            format: date
+            example: "2026-01-20"
+        - name: resources
+          in: query
+          description: 対象リソース名（カンマ区切り）
+          required: false
+          schema:
+            type: string
+        - name: duration
+          in: query
+          description: 所要時間（分）。指定時は連続確保できる枠のみ
+          required: false
+          schema:
+            type: integer
+            example: 30
+        - name: external_menu_id
+          in: query
+          description: 外部メニューID
+          required: false
+          schema:
+            type: string
+        - name: menu_name
+          in: query
+          description: メニュー名
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 空き枠一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slots:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Slot'
+        '401':
+          description: 認証エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /menu:
+    get:
+      summary: 診療メニュー取得
+      description: 利用可能な診療メニュー一覧を取得
+      tags:
+        - マスタ
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - $ref: '#/components/parameters/TestMode'
+      responses:
+        '200':
+          description: メニュー一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  menus:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MenuItem'
+        '401':
+          description: 認証エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /reservations/search:
+    get:
+      summary: 予約検索
+      description: 指定した電話番号の予約情報を検索
+      tags:
+        - 予約
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - $ref: '#/components/parameters/TestMode'
+        - name: customer_phone
+          in: query
+          description: 顧客の電話番号
+          required: true
+          schema:
+            type: string
+            example: "09012345678"
+        - name: date_from
+          in: query
+          description: 検索開始日 (YYYY-MM-DD)
+          required: false
+          schema:
+            type: string
+            format: date
+            example: "2026-01-01"
+        - name: date_to
+          in: query
+          description: 検索終了日 (YYYY-MM-DD)
+          required: false
+          schema:
+            type: string
+            format: date
+            example: "2026-12-31"
+      responses:
+        '200':
+          description: 予約一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Reservation'
+        '401':
+          description: 認証エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /reservations:
+    post:
+      summary: 予約作成
+      description: 新規予約を作成
+      tags:
+        - 予約
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - $ref: '#/components/parameters/TestMode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReservationRequest'
+      responses:
+        '200':
+          description: 予約作成成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  reservation:
+                    $ref: '#/components/schemas/Reservation'
+        '400':
+          description: リクエストエラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 認証エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: 予約競合
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      summary: 予約更新
+      description: 既存予約を更新（日時変更、メニュー変更など）
+      tags:
+        - 予約
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - $ref: '#/components/parameters/TestMode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateReservationRequest'
+      responses:
+        '200':
+          description: 予約更新成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  reservation:
+                    $ref: '#/components/schemas/Reservation'
+        '400':
+          description: リクエストエラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 認証エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 予約が見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: 予約キャンセル
+      description: 予約をキャンセル（または削除）
+      tags:
+        - 予約
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - $ref: '#/components/parameters/TestMode'
+        - name: force
+          in: query
+          description: trueの場合は削除扱い、それ以外でキャンセル
+          required: false
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelReservationRequest'
+      responses:
+        '200':
+          description: キャンセル成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: リクエストエラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: 認証エラー
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: 予約が見つからない
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/restart:
+    post:
+      summary: セッション再起動
+      description: ブラウザセッションを強制的に再初期化
+      tags:
+        - システム
+      security:
+        - LoginId: []
+          LoginPassword: []
+      responses:
+        '200':
+          description: 再起動成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+
+  /debug/browser:
+    get:
+      summary: ブラウザ情報取得
+      description: "ブラウザの現在の状態をデバッグ。Accept: image/pngヘッダーで画像のみ返す"
+      tags:
+        - デバッグ
+      security:
+        - LoginId: []
+          LoginPassword: []
+      parameters:
+        - name: selector
+          in: query
+          description: DOMセレクタ
+          required: false
+          schema:
+            type: string
+            example: "#txtAppointMemo"
+        - name: screenshot
+          in: query
+          description: スクリーンショットを含める
+          required: false
+          schema:
+            type: boolean
+            default: false
+        - name: html
+          in: query
+          description: HTMLを含める
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: ブラウザ情報
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url:
+                    type: string
+                  title:
+                    type: string
+                  screenshot:
+                    type: string
+                    description: Base64エンコードされた画像
+                  html:
+                    type: string
+            image/png:
+              schema:
+                type: string
+                format: binary
+
+  /debug/evaluate:
+    post:
+      summary: JavaScriptコード実行
+      description: ブラウザコンテキストで任意のJavaScriptを実行
+      tags:
+        - デバッグ
+      security:
+        - LoginId: []
+          LoginPassword: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvaluateRequest'
+      responses:
+        '200':
+          description: 実行結果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    description: JavaScript実行結果
+
+tags:
+  - name: システム
+    description: ヘルスチェック、ステータス確認
+  - name: 予約
+    description: 予約の検索・作成・更新・キャンセル
+  - name: マスタ
+    description: メニューなどのマスタデータ取得
+  - name: デバッグ
+    description: デバッグ用エンドポイント
