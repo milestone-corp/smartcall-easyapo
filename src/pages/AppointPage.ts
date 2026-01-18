@@ -141,6 +141,9 @@ export class AppointPage extends BasePage {
    */
   private async waitForLoading(): Promise<void> {
     await this.page.waitForSelector('#loading', { state: 'hidden' });
+    await this.wait(200);
+    // 一瞬ローダーが消えて、即座に再開することがあるのでもう一度
+    await this.page.waitForSelector('#loading', { state: 'hidden' });
   }
 
   /**
@@ -217,8 +220,7 @@ export class AppointPage extends BasePage {
           if (node.textContent?.includes(searchText)) {
             const element = node.parentElement;
             if (element) {
-              (element as any).scrollIntoViewIfNeeded?.(true) ||
-                element.scrollIntoView({ block: 'center', behavior: 'instant' });
+              element.scrollIntoView({ block: 'center', behavior: 'instant' });
             }
             break;
           }
@@ -267,6 +269,10 @@ export class AppointPage extends BasePage {
     this.step(`selectDate: API response received (${dateStr})`);
 
     await this.waitForLoading();
+    this.page.evaluate(() => {
+      const calendarBody = document.querySelector('#calendar-body');
+      if (calendarBody) calendarBody.scrollTop = 0;
+    });
     this.step(`selectDate: complete (${dateStr})`);
   }
 
@@ -1262,6 +1268,10 @@ export class AppointPage extends BasePage {
       const time = reservations.at(-1)?.slot?.start_at
       if (time) {
         await this.scrollToText(`${time}～`);
+      }
+      const desiredTime = reservations.at(-1)?.slot?.desired?.time
+      if (desiredTime) {
+        await this.scrollToText(`${desiredTime}～`);
       }
     }
 

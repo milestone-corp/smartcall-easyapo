@@ -158,6 +158,7 @@ async function ensureSessionManager(
         credentials,
         baseUrl: BASE_URL,
         headless: process.env.HEADLESS !== 'false',
+        viewport: { width: 1800, height: 1300 },
         keepAliveIntervalMs: KEEP_ALIVE_INTERVAL_MS,
       });
 

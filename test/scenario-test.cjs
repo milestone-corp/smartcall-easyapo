@@ -412,7 +412,7 @@ const scenarios = [
           reservation1: create1.data.external_reservation_id,
           reservation2: create2.data.external_reservation_id,
         },
-        screenshots: [search1.screenshot, search2.screenshot].filter(isString),
+        screenshots: [create1.screenshot, create2.screenshot].filter(isString),
       };
     },
   },
@@ -641,10 +641,6 @@ const scenarios = [
         desiredTime: time1,
       });
 
-      // 両方の予約を検索
-      const search1 = await searchReservations({ customerPhone: phone1, dateFrom: date, dateTo: date });
-      const search2 = await searchReservations({ customerPhone: phone2, dateFrom: date, dateTo: date });
-
       // クリーンアップ
       await deleteReservation({ date, time: time1, customerPhone: phone1 });
       // phone2は time1 に移動しているはず
@@ -654,7 +650,7 @@ const scenarios = [
         return {
           success: false,
           error: `時刻変更失敗（自動リトライ失敗の可能性）: ${updateResult.data.error}`,
-          screenshots: [create1.screenshot, create2.screenshot, search1.screenshot, search2.screenshot].filter(isString),
+          screenshots: [create1.screenshot, create2.screenshot].filter(isString),
         };
       }
 
@@ -663,7 +659,7 @@ const scenarios = [
         details: {
           note: '衝突が発生し、別担当者への自動リトライが行われた',
         },
-        screenshots: [create1.screenshot, create2.screenshot, search1.screenshot, search2.screenshot].filter(isString),
+        screenshots: [create1.screenshot, create2.screenshot, updateResult.screenshot].filter(isString),
       };
     },
   },
