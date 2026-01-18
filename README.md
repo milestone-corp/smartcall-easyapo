@@ -104,8 +104,16 @@ npm run start:persistent
 |------------|------|------|
 | `date_from` | No | 開始日（YYYY-MM-DD）デフォルト: 本日 |
 | `date_to` | No | 終了日（YYYY-MM-DD）デフォルト: date_fromと同じ |
+| `resources` | No | 対象リソース名（カンマ区切り、例: `Dr1,Dr2`） |
+| `duration` | No | 所要時間（分）。連続して確保できる枠のみ返却 |
+| `external_menu_id` | No | 診療メニューID（`/menu`で取得可能） |
+| `menu_name` | No | 診療メニュー名 |
 
-**注意:** 現在時刻（JST）より過去の時間枠は返却されません。
+**注意:**
+- 現在時刻（JST）より過去の時間枠は返却されません
+- `external_menu_id`または`menu_name`を指定すると、そのメニューの`resources`と`duration_min`で自動的に絞り込みます
+- `resources`とメニューの両方を指定した場合、両方に含まれるリソースのみが対象になります
+- `duration`とメニューの両方を指定した場合、長い方の時間が適用されます
 
 **レスポンス:**
 ```json
@@ -165,11 +173,28 @@ npm run start:persistent
   "date": "2025-12-28",
   "time": "09:00",
   "duration_min": 30,
+  "customer_id": "5168",
   "customer_name": "山田太郎",
   "customer_phone": "09012345678",
-  "menu_name": "初診"
+  "menu_name": "初診",
+  "external_menu_id": "1"
 }
 ```
+
+| パラメータ | 必須 | 説明 |
+|------------|------|------|
+| `date` | Yes | 予約日（YYYY-MM-DD） |
+| `time` | Yes | 予約時刻（HH:MM） |
+| `duration_min` | No | 所要時間（分）。メニュー指定時はメニューの所要時間を使用 |
+| `customer_id` | No | 患者番号（診察券番号）。未指定時は`customer_name`/`customer_phone`で自動検索 |
+| `customer_name` | Yes | 顧客名 |
+| `customer_phone` | No | 顧客電話番号 |
+| `menu_name` | No | 診療メニュー名 |
+| `external_menu_id` | No | 診療メニューID（`/menu`で取得可能） |
+
+**注意:**
+- `customer_id`を指定しない場合、`customer_name`と`customer_phone`で患者マスタを検索し、ヒットした場合は自動的に患者番号を設定します
+- メニューを指定すると、対応可能な担当者から自動的に空いている担当者が選択されます
 
 **レスポンス:**
 ```json
