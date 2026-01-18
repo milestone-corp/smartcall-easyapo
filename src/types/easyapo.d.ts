@@ -642,3 +642,11 @@ export type PatientList = VueComponent & {
    */
   clickClose(): void;
 }
+
+/**
+ * 患者OR検索APIレスポンス（GET /patients?or_search=1）
+ */
+export type PatientsOrSearchResponse = ApiResponse<{
+  /** 検索結果の患者一覧 */
+  patients: PatientSearchItem[];
+}>

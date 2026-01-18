@@ -23,6 +23,7 @@ import type {
   TreatmentItem,
   TreatmentItemsResponse,
   PatientsSearchResponse,
+  PatientsOrSearchResponse,
   PatientSearchItem,
   PatientDetailResponse,
   ReservationDetailResponse,
@@ -881,14 +882,36 @@ export class AppointPage extends BasePage {
     await this.page.waitForSelector('.alert-wrapper .alert h2');
     this.step(`createReservation: dialog opened`);
 
-    // 3. candidateがアクティブな場合はリセット
     {
+      // 3. candidateがアクティブな場合はリセット
       await using reserveDay = await this.getVueComponent('ReserveDay');
       await reserveDay?.evaluate((reserveDay) => {
         if (reserveDay?.candidate?.is_active) {
           reserveDay.$store.commit('resetCandidate');
         }
       });
+      // patientIdが未指定の場合、顧客名・電話番号で患者検索
+      if (!patientId && (customerName || customerPhone)) {
+        const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
+          if (!reserveDay) return null;
+
+          const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
+            or_search: 0,
+            patient_name: '',
+            patient_name_kana: params.customerName,
+            tel: params.customerPhone,
+            sort_order: 'patient_number',
+          });
+
+          return response?.data ?? null;
+        }, { customerName, customerPhone });
+
+        if (searchResult?.result && searchResult.data?.patients?.length) {
+          // 最初にヒットした患者のpatient_numberを使用
+          patientId = searchResult.data.patients[0]?.patient_number;
+          this.step(`createReservation: patient found (patient_number: ${patientId})`);
+        }
+      }
     }
 
     // 4. ReserveAddコンポーネントを取得してフォームに入力
