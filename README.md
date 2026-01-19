@@ -18,11 +18,12 @@ npm install
 
 # 環境変数を設定
 cp .env.example .env
-# .env を編集してログインID/パスワードを設定
 
 # 常駐サーバーを起動
 npm run start:persistent
 ```
+
+**注意**: ログインID/パスワードは環境変数ではなく、APIリクエスト時にヘッダーで渡します。
 
 ## APIエンドポイント
 
@@ -340,6 +341,11 @@ smartcall-easyapo/
 
 | 変数名 | 説明 | デフォルト |
 |--------|------|------------|
+| `SMARTCALL_MODE` | 動作モード（`stub`でスタブモード） | - |
 | `PORT` | サーバーポート | 3000 |
+| `ENABLE_SCREENSHOT` | スクリーンショット有効化 | true |
+| `SCREENSHOT_DIR` | スクリーンショット保存先 | ./screenshots |
 | `KEEP_ALIVE_INTERVAL_MS` | キープアライブ間隔（ms） | 600000 (10分) |
 | `REQUEST_TIMEOUT_MS` | リクエストタイムアウト（ms） | 600000 (10分) |
+
+**注意**: ログインID/パスワードは環境変数ではなく、APIリクエストヘッダー（`X-RPA-Login-Id`, `X-RPA-Login-Password`）で渡します。
