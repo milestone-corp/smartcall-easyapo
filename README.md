@@ -341,7 +341,6 @@ smartcall-easyapo/
 
 | 変数名 | 説明 | デフォルト |
 |--------|------|------------|
-| `SMARTCALL_MODE` | 動作モード（`stub`でスタブモード） | - |
 | `PORT` | サーバーポート | 3000 |
 | `ENABLE_SCREENSHOT` | スクリーンショット有効化 | true |
 | `SCREENSHOT_DIR` | スクリーンショット保存先 | ./screenshots |
