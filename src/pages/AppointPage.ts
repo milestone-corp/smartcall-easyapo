@@ -799,14 +799,25 @@ export class AppointPage extends BasePage {
    * @returns マッチした診療メニュー、または見つからない場合はundefined
    */
   private async findTreatmentItem(menu?: MenuInfo): Promise<TreatmentItem | undefined> {
+    console.log(`[DEBUG] findTreatmentItem: menu=${JSON.stringify(menu)}`);
     if (!menu?.menu_name && !menu?.external_menu_id) {
+      console.log(`[DEBUG] findTreatmentItem: no menu_name or external_menu_id, returning undefined`);
       return undefined;
     }
     const treatmentItems = await this.getTreatmentItems();
-    return (
-      menu.external_menu_id && treatmentItems.find((item) => String(item.id) === String(menu.external_menu_id)) ||
-      treatmentItems.find((item) => item.title.includes(menu.menu_name)
-    ));
+    console.log(`[DEBUG] findTreatmentItem: treatmentItems count=${treatmentItems.length}, first 3 items=${JSON.stringify(treatmentItems.slice(0, 3).map(i => ({ id: i.id, title: i.title, treatment_time: i.treatment_time })))}`);
+
+    // external_menu_idで検索
+    if (menu.external_menu_id) {
+      const foundById = treatmentItems.find((item) => String(item.id) === String(menu.external_menu_id));
+      console.log(`[DEBUG] findTreatmentItem: searching by external_menu_id=${menu.external_menu_id}, found=${foundById ? JSON.stringify({ id: foundById.id, title: foundById.title, treatment_time: foundById.treatment_time }) : 'undefined'}`);
+      if (foundById) return foundById;
+    }
+
+    // menu_nameで検索
+    const foundByName = treatmentItems.find((item) => item.title.includes(menu.menu_name));
+    console.log(`[DEBUG] findTreatmentItem: searching by menu_name=${menu.menu_name}, found=${foundByName ? JSON.stringify({ id: foundByName.id, title: foundByName.title, treatment_time: foundByName.treatment_time }) : 'undefined'}`);
+    return foundByName;
   }
 
   /**
@@ -843,20 +854,26 @@ export class AppointPage extends BasePage {
     customerPhone?: string;
   }): Promise<{ reservationId: string } | { error: string }> {
     this.step(`createReservation: start (${date} ${timeFrom}, ${customerName})`);
+    console.log(`[DEBUG] createReservation: menu=${JSON.stringify(menu)}, durationMin=${durationMin}`);
 
     // 1. 予約日を読み込む
     await this.selectDate(date);
 
     // メニューからtreatment_timeとcolorを取得
     const matchedItem = await this.findTreatmentItem(menu);
+    console.log(`[DEBUG] createReservation: matchedItem=${JSON.stringify(matchedItem)}`);
     const menuTreatmentTime = matchedItem?.treatment_time;
     const menuColor = matchedItem?.color;
 
-    // time_toを計算（優先順位: timeTo > durationMin > menuTreatmentTime > 既定値45分）
-    const duration = durationMin ?? menuTreatmentTime ?? 45;
-    const calculatedTimeTo = timeTo || dayjs(`${date} ${timeFrom}`, 'YYYY-MM-DD HH:mm')
-      .add(duration, 'minute')
-      .format('HH:mm');
+    // time_toを計算（メニューが一致した場合はメニューの時間を優先）
+    // メニュー時間 > リクエストのtimeTo > リクエストのdurationMin > 既定値45分
+    const duration = menuTreatmentTime ?? durationMin ?? 45;
+    console.log(`[DEBUG] createReservation: menuTreatmentTime=${menuTreatmentTime}, duration=${duration}`);
+    // メニューが見つかった場合は、渡されたtimeToを無視してメニューの時間から計算
+    const calculatedTimeTo = menuTreatmentTime
+      ? dayjs(`${date} ${timeFrom}`, 'YYYY-MM-DD HH:mm').add(menuTreatmentTime, 'minute').format('HH:mm')
+      : (timeTo || dayjs(`${date} ${timeFrom}`, 'YYYY-MM-DD HH:mm').add(duration, 'minute').format('HH:mm'));
+    console.log(`[DEBUG] createReservation: calculatedTimeTo=${calculatedTimeTo}`);
 
     // 2. 予約作成ダイアログを開く
     {
@@ -1136,6 +1153,12 @@ export class AppointPage extends BasePage {
         // 予約日を読み込む（担当者検索のため）
         await this.selectDate(reservation.slot.date);
 
+        // メニューの時間を取得（external_menu_id指定時はメニュー時間を優先）
+        const matchedMenuItem = await this.findTreatmentItem(reservation.menu);
+        const menuDuration = matchedMenuItem?.treatment_time;
+        const effectiveDuration = menuDuration ?? reservation.slot.duration_min ?? 45;
+        console.log(`[DEBUG] processReservations: menuDuration=${menuDuration}, slot.duration_min=${reservation.slot.duration_min}, effectiveDuration=${effectiveDuration}`);
+
         // 担当者IDを決定
         let columnNo: number;
         const staffInfo = reservation.staff;
@@ -1146,10 +1169,9 @@ export class AppointPage extends BasePage {
           columnNo = parseInt(staffInfo.staff_id, 10);
         } else {
           // preference が 'any' または staff_id がない場合は自動選択
-          const durationMin = reservation.slot.duration_min || 45;
           const availableStaffId = await this.findAvailableStaff(
             reservation.slot.start_at,
-            durationMin,
+            effectiveDuration,
             reservation.menu
           );
 
@@ -1160,7 +1182,7 @@ export class AppointPage extends BasePage {
               result: {
                 status: 'conflict',
                 error_code: 'NO_AVAILABLE_STAFF',
-                error_message: `指定時間枠（${reservation.slot.date} ${reservation.slot.start_at} ～ ${durationMin}分 ）に空いている担当者がいません`,
+                error_message: `指定時間枠（${reservation.slot.date} ${reservation.slot.start_at} ～ ${effectiveDuration}分 ）に空いている担当者がいません`,
               },
             });
             continue;

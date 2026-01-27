@@ -571,6 +571,8 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
   }
 
   const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name, external_menu_id } = req.body;
+  console.log(`[DEBUG] POST /reservations: req.body=${JSON.stringify(req.body)}`);
+  console.log(`[DEBUG] POST /reservations: external_menu_id=${external_menu_id}, menu_name=${menu_name}`);
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   if (!date || !time || !customer_name || !customer_phone) {
