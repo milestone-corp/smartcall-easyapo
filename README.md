@@ -186,16 +186,18 @@ npm run start:persistent
 |------------|------|------|
 | `date` | Yes | 予約日（YYYY-MM-DD） |
 | `time` | Yes | 予約時刻（HH:MM） |
-| `duration_min` | No | 所要時間（分）。メニュー指定時はメニューの所要時間を使用 |
+| `duration_min` | No | 所要時間（分）。メニュー指定時は無視される |
 | `customer_id` | No | 患者番号（診察券番号）。未指定時は`customer_name`/`customer_phone`で自動検索 |
 | `customer_name` | Yes | 顧客名 |
 | `customer_phone` | No | 顧客電話番号 |
 | `menu_name` | No | 診療メニュー名 |
-| `external_menu_id` | No | 診療メニューID（`/menu`で取得可能） |
+| `external_menu_id` | No | 診療メニューID（`/menu`で取得可能、`menu_name`より優先） |
 
 **注意:**
 - `customer_id`を指定しない場合、`customer_name`と`customer_phone`で患者マスタを検索し、ヒットした場合は自動的に患者番号を設定します
 - メニューを指定すると、対応可能な担当者から自動的に空いている担当者が選択されます
+- **所要時間の優先順位**: `メニューの所要時間` > `duration_min` > `45分（デフォルト）`
+  - `external_menu_id`または`menu_name`でメニューが特定できた場合、そのメニューの所要時間が使用されます（`duration_min`は無視）
 
 **レスポンス:**
 ```json
@@ -237,6 +239,7 @@ npm run start:persistent
 **注意事項:**
 - `desired_time`を指定すると、終了時刻は自動的に所要時間を維持して計算されます
 - メニュー変更時、現在の担当者が対応不可の場合は対応可能な担当者に自動変更されます
+- メニュー変更時、そのメニューの所要時間に基づいて終了時刻が再計算されます
 - 診療時間外などの制約に違反する場合はエラーが返されます
 
 **レスポンス:**
