@@ -1515,7 +1515,7 @@ export class AppointPage extends BasePage {
         timeFrom: reserveEdit.form.time_from,
         timeTo: reserveEdit.form.time_to,
       };
-    }, { menuName: matchedItem?.title, customerPhone, menuColor, timeTo: calculatedTimeTo, desiredDate: desired?.date, desiredTime: desired?.time });
+    }, { menuName: matchedItem?.title || menu?.menu_name, customerPhone, menuColor, timeTo: calculatedTimeTo, desiredDate: desired?.date, desiredTime: desired?.time });
 
     // 5. メニューの担当者対応可否をチェック、対応不可なら別の担当者を探す
     if (matchedItem?.use_column?.length) {
