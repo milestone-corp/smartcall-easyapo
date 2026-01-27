@@ -236,8 +236,10 @@ export class AppointPage extends BasePage {
    * 指定日付の予約データを読み込む（カレンダーで日付を選択）
    */
   private async selectDate(dateStr: string): Promise<void> {
+    const selectStart = Date.now();
     this.step(`selectDate: start (${dateStr})`);
     await this.waitForLoading();
+    const t1 = Date.now() - selectStart;
 
     // 既に同じ日付が選択されている場合はスキップ
     {
@@ -250,6 +252,7 @@ export class AppointPage extends BasePage {
         return;
       }
     }
+    const t2 = Date.now() - selectStart;
 
     // 予約データ取得APIのレスポンスを監視
     const reservationsResponsePromise = this.page.waitForResponse(
@@ -264,17 +267,21 @@ export class AppointPage extends BasePage {
         calendar.clickDay({ id: dateId })
       }, dateStr);
     }
+    const t3 = Date.now() - selectStart;
 
     // APIレスポンスを待機
     await reservationsResponsePromise;
+    const t4 = Date.now() - selectStart;
     this.step(`selectDate: API response received (${dateStr})`);
 
     await this.waitForLoading();
+    const t5 = Date.now() - selectStart;
     this.page.evaluate(() => {
       const calendarBody = document.querySelector('#calendar-body');
       if (calendarBody) calendarBody.scrollTop = 0;
     });
     this.step(`selectDate: complete (${dateStr})`);
+    console.log(`[PERF] selectDate(${dateStr}): waitLoading1=${t1}ms, checkCurrent=${t2 - t1}ms, clickDay=${t3 - t2}ms, waitAPI=${t4 - t3}ms, waitLoading2=${t5 - t4}ms`);
   }
 
   /**
@@ -308,9 +315,19 @@ export class AppointPage extends BasePage {
 
   /**
    * 指定日が休診日かどうかを判定
+   *
+   * EasyApoのclosed_daysカレンダーの値:
+   * - 1 = 定休日（休診）
+   * - 2 = 臨時休診（休診）
+   * - 3 = 営業日（予約可能）
+   * - null/undefined = データなし（営業日扱い）
    */
   private isClosedDay(dateStr: string, closedDays: ClosedDayCalendar[]): boolean {
-    return closedDays.some((cal) => cal.calendar[dateStr] != null);
+    return closedDays.some((cal) => {
+      const value = cal.calendar[dateStr];
+      // 値が1または2の場合は休診日
+      return value === 1 || value === 2;
+    });
   }
 
   /**
@@ -485,9 +502,11 @@ export class AppointPage extends BasePage {
     /** メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整） */
     menu?: MenuInfo;
   }): Promise<SlotInfo[]> {
+    const perfStart = Date.now();
     this.step(`getAvailableSlots: start (${dateFrom} - ${dateTo})`);
     // メニューから診療メニュー情報を取得
     const matchedItem = await this.findTreatmentItem(menu);
+    console.log(`[PERF] findTreatmentItem: ${Date.now() - perfStart}ms`);
 
     // resourcesの決定: 両方指定されていれば積集合、片方のみなら指定された方
     let effectiveResources = resources;
@@ -516,21 +535,46 @@ export class AppointPage extends BasePage {
     const startDate = dayjs(dateFrom);
     const endDate = dayjs(dateTo);
 
+    // 休診日データをキャッシュ（最初の日付取得時に保存）
+    let cachedClosedDays: ClosedDayCalendar[] | null = null;
+
     let currentDate = startDate;
     while (currentDate.isBefore(endDate) || currentDate.isSame(endDate, 'day')) {
       const dateStr = currentDate.format('YYYY-MM-DD');
+      const loopStart = Date.now();
+
+      // キャッシュされた休診日データがあれば、事前に休診日をスキップ（APIコール不要）
+      if (cachedClosedDays && this.isClosedDay(dateStr, cachedClosedDays)) {
+        console.log(`[PERF] date=${dateStr}: SKIPPED (closed day, no API call)`);
+        currentDate = currentDate.add(1, 'day');
+        continue;
+      }
 
       await this.selectDate(dateStr);
+      const selectDateTime = Date.now() - loopStart;
+
       const dayData = await this.getReserveDayData();
+      const getDataTime = Date.now() - loopStart - selectDateTime;
+
+      console.log(`[PERF] date=${dateStr}: selectDate=${selectDateTime}ms, getReserveDayData=${getDataTime}ms`);
 
       if (dayData) {
-        // 休診日はスキップ
-        if (this.isClosedDay(dateStr, dayData.closed_days)) {
+        // 最初の取得時にclosed_daysをキャッシュ
+        if (!cachedClosedDays) {
+          cachedClosedDays = dayData.closed_days;
+          console.log(`[PERF] closed_days cached for subsequent date checks`);
+        }
+
+        // 休診日はスキップ（キャッシュに保存されていない最初の日付の場合のみ到達）
+        const isClosed = this.isClosedDay(dateStr, dayData.closed_days);
+        if (isClosed) {
+          console.log(`[PERF] date=${dateStr}: closed day (first date check)`);
           currentDate = currentDate.add(1, 'day');
           continue;
         }
 
         const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, effectiveResources, effectiveDuration);
+        console.log(`[PERF] date=${dateStr}: ${daySlots.length} slots found`);
         slots.push(...daySlots);
       }
 
@@ -538,6 +582,7 @@ export class AppointPage extends BasePage {
     }
 
     this.step(`getAvailableSlots: complete (${slots.length} slots found)`);
+    console.log(`[PERF] getAvailableSlots total: ${Date.now() - perfStart}ms, dates processed: ${endDate.diff(startDate, 'day') + 1}, slots found: ${slots.length}`);
     return slots;
   }
 

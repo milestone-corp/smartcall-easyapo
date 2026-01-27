@@ -352,7 +352,7 @@ export type Candidate = {
 export type ClosedDayCalendar = {
   /** カレンダータイプ（1: 定休日, 2: 臨時休診など） */
   calendar_type: number;
-  /** 日付ごとの休診フラグ（キー: YYYY-MM-DD, 値: nullでなければ休診） */
+  /** 日付ごとのステータス（キー: YYYY-MM-DD, 値: 1=定休日, 2=臨時休診, 3=営業日, null=データなし） */
   calendar: Record<string, number | null>;
 }
 
