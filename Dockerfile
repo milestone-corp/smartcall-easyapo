@@ -1,7 +1,7 @@
 # SmartCall RPA API用 Dockerfile
 
 # Playwright公式イメージ（ブラウザ込み）
-FROM mcr.microsoft.com/playwright:v1.57.0-noble
+FROM mcr.microsoft.com/playwright:v1.58.0-noble
 
 WORKDIR /app
 
