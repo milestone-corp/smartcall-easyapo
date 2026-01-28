@@ -29,7 +29,7 @@ import type {
   ReservationDetailResponse,
   ReservationApiResponse,
   ReservationsListResponse,
-  ReservationsLGetResponse,
+  ReservationsGetResponse,
   CancelAdd,
   ClosedDayCalendar,
   VueComponent,

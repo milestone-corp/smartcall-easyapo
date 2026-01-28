@@ -473,6 +473,18 @@ export type ReservationsListResponse = {
 }
 
 /**
+ * 予約取得APIレスポンス（GET /reservations/{id}）
+ */
+export type ReservationsGetResponse = {
+  /** 処理結果 */
+  result: boolean;
+  /** データ */
+  data: ReserveRow | null;
+  /** メッセージ */
+  message: unknown | null;
+}
+
+/**
  * 予約作成フォームのメモ項目
  */
 export type ReserveAddFormMemo = {
