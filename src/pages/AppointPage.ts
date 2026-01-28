@@ -29,6 +29,7 @@ import type {
   ReservationDetailResponse,
   ReservationApiResponse,
   ReservationsListResponse,
+  ReservationsLGetResponse,
   CancelAdd,
   ClosedDayCalendar,
   VueComponent,
@@ -1482,17 +1483,44 @@ export class AppointPage extends BasePage {
     // 1. 予約日を読み込む
     await this.selectDate(date);
 
-    // メニューからcolor、treatment_timeを取得
-    const matchedItem = await this.findTreatmentItem(menu);
-    const menuColor = matchedItem?.color;
-    const menuTreatmentTime = matchedItem?.treatment_time;
-
     // 2. 予約を見つける
     const found = await this.findReservationByPhoneAndTime(date, time, customerPhone);
     if (!found) {
       return { error: `予約が見つかりません: ${date} ${time} ${customerPhone}` };
     }
     this.step(`updateReservation: reservation found (id: ${found.reservationId})`);
+
+    // menuが指定されていない場合、既存の予約からメニューを特定する。
+    if (!menu?.menu_name || !menu?.external_menu_id) {
+      await using reserveDay = await this.getVueComponent('ReserveDay');
+      const reservationData = await reserveDay?.evaluate(async (reserveDay, reservationId) => {
+        if (!reserveDay) return null;
+
+        const response = await reserveDay.get<ReservationsLGetResponse>(
+          `/reservations/${reservationId}`,
+          { id: reservationId, original: true }
+        );
+        return response?.data?.data ?? null;
+      }, found.reservationId) ?? null;
+
+      if (reservationData) {
+        // memoから「【SmartCall予約】 症状:[xxx]」パターンを抽出
+        const smartcallMemo = reservationData.memo?.find(m => m.memo?.includes('【SmartCall予約】'));
+        if (smartcallMemo?.memo) {
+          const match = smartcallMemo.memo.match(/症状:\[([^\]]*)\]/);
+          if (match?.[1]) {
+            if (!menu) menu = { menu_name: '' }
+            menu.menu_name = match[1];
+            this.step(`updateReservation: extracted menu name from memo: ${menu.menu_name}`);
+          }
+        }
+      }
+    }
+    
+    // メニューからcolor、treatment_timeを取得
+    const matchedItem = await this.findTreatmentItem(menu);
+    const menuColor = matchedItem?.color;
+    const menuTreatmentTime = matchedItem?.treatment_time;
 
     // 3. 予約編集ダイアログを開く
     await this.openReserveEditDialog(found.reservationId);
