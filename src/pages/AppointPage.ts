@@ -774,21 +774,26 @@ export class AppointPage extends BasePage {
     const endDate = dayjs(dateTo, 'YYYY-MM-DD');
     const diffDays = endDate.diff(startDate, 'day') + 1;
 
-    // 各日の予約を検索
-    for (let i = 0; i < diffDays; i++) {
-      const currentDate = startDate.add(i, 'day').format('YYYY-MM-DD');
+    // 30日単位でバッチ処理（API呼び出し回数を削減: 120回→4〜5回）
+    const BATCH_DAYS = 30;
+    this.step(`searchReservationsByMemo: searching ${diffDays} days in ${Math.ceil(diffDays / BATCH_DAYS)} batches`);
 
-      // /reservations APIで指定日の予約を取得
+    for (let i = 0; i < diffDays; i += BATCH_DAYS) {
+      const batchStartDate = startDate.add(i, 'day');
+      const remainingDays = Math.min(BATCH_DAYS, diffDays - i);
+      const currentDate = batchStartDate.format('YYYY-MM-DD');
+
+      // /reservations APIで複数日分の予約を一括取得
       await using reserveDay = await this.getVueComponent('ReserveDay');
-      const apiResult = await reserveDay?.evaluate(async (reserveDay, date) => {
+      const apiResult = await reserveDay?.evaluate(async (reserveDay, params) => {
         if (!reserveDay) return null;
 
         const response = await reserveDay.get<ReservationsListResponse>(
           '/reservations',
-          { from: date, days: 1 }
+          { from: params.date, days: params.days }
         );
         return response?.data ?? null;
-      }, currentDate) ?? null;
+      }, { date: currentDate, days: remainingDays }) ?? null;
 
       if (!apiResult?.result || !apiResult.data?.reservations) {
         continue;
