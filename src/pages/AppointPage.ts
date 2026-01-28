@@ -1491,7 +1491,7 @@ export class AppointPage extends BasePage {
     this.step(`updateReservation: reservation found (id: ${found.reservationId})`);
 
     // menuが指定されていない場合、既存の予約からメニューを特定する。
-    if (!menu?.menu_name || !menu?.external_menu_id) {
+    if (!menu?.menu_name && !menu?.external_menu_id) {
       await using reserveDay = await this.getVueComponent('ReserveDay');
       const reservationData = await reserveDay?.evaluate(async (reserveDay, reservationId) => {
         if (!reserveDay) return null;
