@@ -934,7 +934,9 @@ export class AppointPage extends BasePage {
     const menuColor = matchedItem?.color;
 
     // 患者検索（patientId未指定の場合、電話番号で自動検索）
+    console.log(`[DEBUG] createReservation: patientSearch check: patientId=${patientId}, customerName=${customerName}, customerPhone=${customerPhone}`);
     if (!patientId && (customerName || customerPhone)) {
+      console.log(`[DEBUG] createReservation: searching patient by name=${customerName}, phone=${customerPhone}`);
       await using reserveDay = await this.getVueComponent('ReserveDay');
       const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
         if (!reserveDay) return null;
@@ -950,10 +952,13 @@ export class AppointPage extends BasePage {
         return response?.data ?? null;
       }, { customerName, customerPhone });
 
+      console.log(`[DEBUG] createReservation: searchResult=${JSON.stringify({ result: searchResult?.result, patientCount: searchResult?.data?.patients?.length, firstPatient: searchResult?.data?.patients?.[0] })}`);
       if (searchResult?.result && searchResult.data?.patients?.length) {
         const matchedPatient = searchResult.data.patients[0];
         patientId = matchedPatient?.patient_number;
-        this.step(`createReservation: patient found (patient_number: ${patientId})`);
+        console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}`);
+      } else {
+        console.log(`[DEBUG] createReservation: no patient found`);
       }
     }
 
