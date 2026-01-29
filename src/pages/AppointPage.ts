@@ -111,6 +111,11 @@ export interface ReservationSearchResult {
 export class AppointPage extends BasePage {
   private readonly screenshot: ScreenshotManager;
 
+  /** メニュー一覧のオンメモリキャッシュ */
+  private treatmentItemsCache: TreatmentItem[] | null = null;
+  private treatmentItemsCacheTime = 0;
+  private static readonly TREATMENT_ITEMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
+
   /**
    * アポイント管理台帳ページ
    *
@@ -593,6 +598,11 @@ export class AppointPage extends BasePage {
    * @returns 診療メニュー一覧（所要時間、処置可能担当者を含む）
    */
   async getTreatmentItems(): Promise<TreatmentItem[]> {
+    // キャッシュが有効な場合はAPIコールをスキップ
+    if (this.treatmentItemsCache && (Date.now() - this.treatmentItemsCacheTime) < AppointPage.TREATMENT_ITEMS_CACHE_TTL_MS) {
+      return this.treatmentItemsCache;
+    }
+
     await using reserveDayHandle = await this.getVueComponent('ReserveDay');
     const result = await reserveDayHandle?.evaluate(async (reserveDay) => {
       if (!reserveDay) return null;
@@ -612,12 +622,19 @@ export class AppointPage extends BasePage {
     // use_columnのIDを担当者名に変換
     const columnMap = new Map(result.columnRows.map((col) => [col.id, col.name]));
 
-    return result.apiResponse.data.treatment_items.map((item) => ({
+    const rawItems = result.apiResponse.data.treatment_items;
+    const items: TreatmentItem[] = rawItems.map((item: typeof rawItems[number]) => ({
       ...item,
       resources: item.use_column
-        .map((id) => columnMap.get(id))
-        .filter((name): name is string => name !== undefined),
+        .map((id: number) => columnMap.get(id))
+        .filter((name: string | undefined): name is string => name !== undefined),
     }));
+
+    // キャッシュに保存
+    this.treatmentItemsCache = items;
+    this.treatmentItemsCacheTime = Date.now();
+
+    return items;
   }
 
   /**
@@ -917,7 +934,6 @@ export class AppointPage extends BasePage {
     const menuColor = matchedItem?.color;
 
     // 患者検索（patientId未指定の場合、電話番号で自動検索）
-    let matchedPatientId: number | undefined;
     if (!patientId && (customerName || customerPhone)) {
       await using reserveDay = await this.getVueComponent('ReserveDay');
       const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
@@ -937,28 +953,18 @@ export class AppointPage extends BasePage {
       if (searchResult?.result && searchResult.data?.patients?.length) {
         const matchedPatient = searchResult.data.patients[0];
         patientId = matchedPatient?.patient_number;
-        matchedPatientId = matchedPatient?.id;
         this.step(`createReservation: patient found (patient_number: ${patientId})`);
       }
     }
 
-    // 既存患者の場合、前回来院日から再診/再初診を自動判定
-    let autoDuration: number | undefined;
-    if (patientId && matchedPatientId && !durationMin && !menuTreatmentTime) {
-      const patientDetail = await this.getPatientDetail(matchedPatientId);
-      if (patientDetail?.result && patientDetail.data) {
-        const lastVisit = patientDetail.data.last_reservation_date;
-        if (lastVisit) {
-          const daysDiff = dayjs(date).diff(dayjs(lastVisit), 'day');
-          autoDuration = daysDiff >= 60 ? 45 : 30;
-          this.step(`createReservation: auto duration=${autoDuration}min (lastVisit=${lastVisit}, daysDiff=${daysDiff})`);
-        }
-      }
-    }
+    // メニュー未指定時のデフォルトdurationは先頭メニューのtreatment_timeを使用
+    const treatmentItems = await this.getTreatmentItems();
+    const fallbackDuration = treatmentItems[0]?.treatment_time ?? 45;
+    this.step(`createReservation: fallbackDuration=${fallbackDuration} (from ${treatmentItems.length > 0 ? 'menu cache' : 'hardcoded default'})`);
 
     // time_toを計算（メニューが一致した場合はメニューの時間を優先）
-    // メニュー時間 > リクエストのdurationMin > 自動判定（再診30分/再初診45分） > 既定値45分
-    const duration = menuTreatmentTime ?? durationMin ?? autoDuration ?? 45;
+    // メニュー時間 > リクエストのdurationMin > 先頭メニューのduration > 45分
+    const duration = menuTreatmentTime ?? durationMin ?? fallbackDuration;
     console.log(`[DEBUG] createReservation: menuTreatmentTime=${menuTreatmentTime}, duration=${duration}`);
     // メニューが見つかった場合は、渡されたtimeToを無視してメニューの時間から計算
     const calculatedTimeTo = menuTreatmentTime
