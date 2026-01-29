@@ -952,7 +952,7 @@ export class AppointPage extends BasePage {
         return response?.data ?? null;
       }, { customerName, customerPhone });
 
-      console.log(`[DEBUG] createReservation: searchResult=${JSON.stringify({ result: searchResult?.result, patientCount: searchResult?.data?.patients?.length, firstPatient: searchResult?.data?.patients?.[0] })}`);
+      console.log(`[DEBUG] createReservation: searchResult keys=${JSON.stringify(searchResult ? Object.keys(searchResult) : null)}, full=${JSON.stringify(searchResult)?.substring(0, 500)}`);
       if (searchResult?.result && searchResult.data?.patients?.length) {
         const matchedPatient = searchResult.data.patients[0];
         patientId = matchedPatient?.patient_number;
