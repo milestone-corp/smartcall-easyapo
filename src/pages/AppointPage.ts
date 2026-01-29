@@ -111,9 +111,9 @@ export interface ReservationSearchResult {
 export class AppointPage extends BasePage {
   private readonly screenshot: ScreenshotManager;
 
-  /** メニュー一覧のオンメモリキャッシュ */
-  private treatmentItemsCache: TreatmentItem[] | null = null;
-  private treatmentItemsCacheTime = 0;
+  /** メニュー一覧のオンメモリキャッシュ（店舗専用コンテナのためstaticで共有） */
+  private static treatmentItemsCache: TreatmentItem[] | null = null;
+  private static treatmentItemsCacheTime = 0;
   private static readonly TREATMENT_ITEMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
 
   /**
@@ -599,8 +599,8 @@ export class AppointPage extends BasePage {
    */
   async getTreatmentItems(): Promise<TreatmentItem[]> {
     // キャッシュが有効な場合はAPIコールをスキップ
-    if (this.treatmentItemsCache && (Date.now() - this.treatmentItemsCacheTime) < AppointPage.TREATMENT_ITEMS_CACHE_TTL_MS) {
-      return this.treatmentItemsCache;
+    if (AppointPage.treatmentItemsCache && (Date.now() - AppointPage.treatmentItemsCacheTime) < AppointPage.TREATMENT_ITEMS_CACHE_TTL_MS) {
+      return AppointPage.treatmentItemsCache;
     }
 
     await using reserveDayHandle = await this.getVueComponent('ReserveDay');
@@ -631,8 +631,8 @@ export class AppointPage extends BasePage {
     }));
 
     // キャッシュに保存
-    this.treatmentItemsCache = items;
-    this.treatmentItemsCacheTime = Date.now();
+    AppointPage.treatmentItemsCache = items;
+    AppointPage.treatmentItemsCacheTime = Date.now();
 
     return items;
   }

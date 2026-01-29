@@ -1,16 +1,36 @@
 services:
-  easyapo:
+  easyapo-watai:
     build: .
-    container_name: smartcall-easyapo
+    container_name: smartcall-easyapo-watai
     env_file:
       - .env
     environment:
-      # デフォルト値（.envで上書き可能）
       - KEEP_ALIVE_INTERVAL_MS=${KEEP_ALIVE_INTERVAL_MS:-600000}
     ports:
-      - "3001:3000"
+      - "3011:3000"
     volumes:
-      - ./screenshots:/app/screenshots
+      - ./screenshots/watai:/app/screenshots
+      - ./input:/app/input
+      - ./output:/app/output
+    restart: unless-stopped
+    command: ["npm", "run", "start"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  easyapo-konishi:
+    build: .
+    container_name: smartcall-easyapo-konishi
+    env_file:
+      - .env
+    environment:
+      - KEEP_ALIVE_INTERVAL_MS=${KEEP_ALIVE_INTERVAL_MS:-600000}
+    ports:
+      - "3012:3000"
+    volumes:
+      - ./screenshots/konishi:/app/screenshots
       - ./input:/app/input
       - ./output:/app/output
     restart: unless-stopped
