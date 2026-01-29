@@ -935,8 +935,8 @@ export class AppointPage extends BasePage {
 
     // 患者検索（patientId未指定の場合、電話番号で自動検索）
     console.log(`[DEBUG] createReservation: patientSearch check: patientId=${patientId}, customerName=${customerName}, customerPhone=${customerPhone}`);
-    if (!patientId && (customerName || customerPhone)) {
-      console.log(`[DEBUG] createReservation: searching patient by name=${customerName}, phone=${customerPhone}`);
+    if (!patientId && customerPhone) {
+      console.log(`[DEBUG] createReservation: searching patient by phone=${customerPhone}`);
       await using reserveDay = await this.getVueComponent('ReserveDay');
       const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
         if (!reserveDay) return null;
@@ -944,13 +944,13 @@ export class AppointPage extends BasePage {
         const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
           or_search: 0,
           patient_name: '',
-          patient_name_kana: params.customerName,
+          patient_name_kana: '',
           tel: params.customerPhone,
           sort_order: 'patient_number',
         });
 
         return response?.data ?? null;
-      }, { customerName, customerPhone });
+      }, { customerPhone });
 
       console.log(`[DEBUG] createReservation: searchResult keys=${JSON.stringify(searchResult ? Object.keys(searchResult) : null)}, full=${JSON.stringify(searchResult)?.substring(0, 500)}`);
       if (searchResult?.result && searchResult.data?.patients?.length) {
