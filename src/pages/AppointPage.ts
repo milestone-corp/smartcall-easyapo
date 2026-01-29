@@ -1539,7 +1539,7 @@ export class AppointPage extends BasePage {
 
       if (reservationData) {
         // memoから「【SmartCall予約】 症状:[xxx]」パターンを抽出
-        const smartcallMemo = reservationData.memo?.find(m => m.memo?.includes('【SmartCall予約】'));
+        const smartcallMemo = reservationData.memo?.find((m: { memo?: string }) => m.memo?.includes('【SmartCall予約】'));
         if (smartcallMemo?.memo) {
           const match = smartcallMemo.memo.match(/症状:\[([^\]]*)\]/);
           if (match?.[1]) {
