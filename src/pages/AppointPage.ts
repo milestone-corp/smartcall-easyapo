@@ -916,9 +916,49 @@ export class AppointPage extends BasePage {
     const menuTreatmentTime = matchedItem?.treatment_time;
     const menuColor = matchedItem?.color;
 
+    // 患者検索（patientId未指定の場合、電話番号で自動検索）
+    let matchedPatientId: number | undefined;
+    if (!patientId && (customerName || customerPhone)) {
+      await using reserveDay = await this.getVueComponent('ReserveDay');
+      const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
+        if (!reserveDay) return null;
+
+        const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
+          or_search: 0,
+          patient_name: '',
+          patient_name_kana: params.customerName,
+          tel: params.customerPhone,
+          sort_order: 'patient_number',
+        });
+
+        return response?.data ?? null;
+      }, { customerName, customerPhone });
+
+      if (searchResult?.result && searchResult.data?.patients?.length) {
+        const matchedPatient = searchResult.data.patients[0];
+        patientId = matchedPatient?.patient_number;
+        matchedPatientId = matchedPatient?.id;
+        this.step(`createReservation: patient found (patient_number: ${patientId})`);
+      }
+    }
+
+    // 既存患者の場合、前回来院日から再診/再初診を自動判定
+    let autoDuration: number | undefined;
+    if (patientId && matchedPatientId && !durationMin && !menuTreatmentTime) {
+      const patientDetail = await this.getPatientDetail(matchedPatientId);
+      if (patientDetail?.result && patientDetail.data) {
+        const lastVisit = patientDetail.data.last_reservation_date;
+        if (lastVisit) {
+          const daysDiff = dayjs(date).diff(dayjs(lastVisit), 'day');
+          autoDuration = daysDiff >= 60 ? 45 : 30;
+          this.step(`createReservation: auto duration=${autoDuration}min (lastVisit=${lastVisit}, daysDiff=${daysDiff})`);
+        }
+      }
+    }
+
     // time_toを計算（メニューが一致した場合はメニューの時間を優先）
-    // メニュー時間 > リクエストのtimeTo > リクエストのdurationMin > 既定値45分
-    const duration = menuTreatmentTime ?? durationMin ?? 45;
+    // メニュー時間 > リクエストのdurationMin > 自動判定（再診30分/再初診45分） > 既定値45分
+    const duration = menuTreatmentTime ?? durationMin ?? autoDuration ?? 45;
     console.log(`[DEBUG] createReservation: menuTreatmentTime=${menuTreatmentTime}, duration=${duration}`);
     // メニューが見つかった場合は、渡されたtimeToを無視してメニューの時間から計算
     const calculatedTimeTo = menuTreatmentTime
@@ -958,28 +998,6 @@ export class AppointPage extends BasePage {
           reserveDay.$store.commit('resetCandidate');
         }
       });
-      // patientIdが未指定の場合、顧客名・電話番号で患者検索
-      if (!patientId && (customerName || customerPhone)) {
-        const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
-          if (!reserveDay) return null;
-
-          const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
-            or_search: 0,
-            patient_name: '',
-            patient_name_kana: params.customerName,
-            tel: params.customerPhone,
-            sort_order: 'patient_number',
-          });
-
-          return response?.data ?? null;
-        }, { customerName, customerPhone });
-
-        if (searchResult?.result && searchResult.data?.patients?.length) {
-          // 最初にヒットした患者のpatient_numberを使用
-          patientId = searchResult.data.patients[0]?.patient_number;
-          this.step(`createReservation: patient found (patient_number: ${patientId})`);
-        }
-      }
     }
 
     // 4. ReserveAddコンポーネントを取得してフォームに入力
