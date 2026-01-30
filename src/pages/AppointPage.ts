@@ -298,6 +298,7 @@ export class AppointPage extends BasePage {
     column_rows: ColumnRow[];
     time_rows: TimeRow[];
     closed_days: ClosedDayCalendar[];
+    closed_td_list: string[];
     start_hour: number;
     start_minute: number;
     end_hour: number;
@@ -311,6 +312,7 @@ export class AppointPage extends BasePage {
         column_rows: appoint.column_rows,
         time_rows: appoint.time_rows,
         closed_days: appoint.closed_days,
+        closed_td_list: appoint.closed_td_list ?? [],
         start_hour: appoint.start_hour,
         start_minute: appoint.start_minute,
         end_hour: appoint.end_hour,
@@ -470,6 +472,9 @@ export class AppointPage extends BasePage {
 
       // 休憩時間はスキップ
       if (this.isBreakTime(timeRow)) continue;
+
+      // 予約受付不可の時間帯はスキップ
+      if (dayData.closed_td_list.includes(timeRow.time_num)) continue;
 
       // この時間枠で空いている担当者を探す
       const availableStaff = availableColumns
@@ -1530,7 +1535,7 @@ export class AppointPage extends BasePage {
       const reservationData = await reserveDay?.evaluate(async (reserveDay, reservationId) => {
         if (!reserveDay) return null;
 
-        const response = await reserveDay.get<ReservationsLGetResponse>(
+        const response = await reserveDay.get<ReservationsGetResponse>(
           `/reservations/${reservationId}`,
           { id: reservationId, original: true }
         );
@@ -1539,7 +1544,7 @@ export class AppointPage extends BasePage {
 
       if (reservationData) {
         // memoから「【SmartCall予約】 症状:[xxx]」パターンを抽出
-        const smartcallMemo = reservationData.memo?.find((m: { memo?: string }) => m.memo?.includes('【SmartCall予約】'));
+        const smartcallMemo = reservationData.memo?.find(m => m.memo?.includes('【SmartCall予約】'));
         if (smartcallMemo?.memo) {
           const match = smartcallMemo.memo.match(/症状:\[([^\]]*)\]/);
           if (match?.[1]) {

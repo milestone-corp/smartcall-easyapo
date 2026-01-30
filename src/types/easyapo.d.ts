@@ -368,6 +368,8 @@ export type ReserveDay = VueComponent & {
   time_rows: TimeRow[];
   /** 休診日カレンダー一覧 */
   closed_days: ClosedDayCalendar[];
+  /** 予約受付不可の時間帯リスト（"HHMM"形式、例: ["1430", "1445"]） */
+  closed_td_list: string[];
   /** 診療開始時（0-23） */
   start_hour: number;
   /** 診療開始分（0-59） */
