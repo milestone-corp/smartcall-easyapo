@@ -644,6 +644,7 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
       success: result.processResult.result.status === 'success',
       reservation_id: result.processResult.reservation_id,
       external_reservation_id: result.processResult.result.external_reservation_id,
+      duration_min: result.processResult.result.duration_min,
       error: result.processResult.result.status !== 'success' ? result.processResult.result.error_message : undefined,
       error_code: result.processResult.result.error_code,
       timing: { total_ms: Date.now() - startTime },

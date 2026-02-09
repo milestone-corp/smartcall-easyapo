@@ -61,6 +61,8 @@ export type ReservationRequest = Omit<ReservationRequestBase, 'operation'> & {
 export interface ReservationResultDetail {
   status: 'success' | 'failed' | 'conflict';
   external_reservation_id?: string;
+  /** 実際の所要時間（分）- メニューのtreatment_timeから決定 */
+  duration_min?: number;
   error_code?: string;
   error_message?: string;
 }
@@ -466,6 +468,10 @@ export class AppointPage extends BasePage {
     // 各時間枠をチェック
     for (let i = 0; i < timeRows.length; i++) {
       const timeRow = timeRows[i];
+
+      // 30分刻みのみ（:00と:30）を対象とする
+      const minute = parseInt(timeRow.minute, 10);
+      if (minute % 30 !== 0) continue;
 
       // 現在時刻より過去の枠はスキップ
       if (`${dateStr} ${timeRow.time_num}` < nowDateTimeNum) continue;
@@ -1303,6 +1309,7 @@ export class AppointPage extends BasePage {
             result: {
               status: 'success',
               external_reservation_id: result.reservationId,
+              duration_min: effectiveDuration,
             },
           });
         }
