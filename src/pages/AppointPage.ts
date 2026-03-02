@@ -1465,7 +1465,49 @@ export class AppointPage extends BasePage {
       }
 
       return false;
-    });
+    }) || await (async (reservations: typeof result.data.reservations) => {
+      // フォールバック: patient_numberから電話番号の正引きでマッチング
+      // メモに電話番号が記録されていない予約（EasyApo直接登録等）に対応
+      const timeCandidates = reservations.filter((reservation) => {
+        if (reservation.cancel === 1) return false;
+        if (time && reservation.time_from !== time) return false;
+        return !!reservation.patient_number;
+      });
+
+      if (timeCandidates.length > 0) {
+        // 電話番号で患者を検索し、patient_numberでマッチング
+        await using reserveDayHandle2 = await this.getVueComponent('ReserveDay');
+        const searchResult = await reserveDayHandle2?.evaluate(async (reserveDay, params) => {
+          if (!reserveDay) return null;
+          const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
+            or_search: 0,
+            patient_name: '',
+            patient_name_kana: '',
+            tel: params.customerPhone,
+            sort_order: 'patient_number',
+          });
+          return response?.data ?? null;
+        }, { customerPhone }) ?? null;
+
+        if (searchResult?.result && searchResult.data?.patients?.length) {
+          // APIがtel検索で返した患者のpatient_numberを収集
+          // （tel1/tel2がnullでもAPI側で電話番号照合済み）
+          const matchedPatientNumbers = new Set(
+            searchResult.data.patients
+              .map((p) => p.patient_number)
+          );
+
+          // 時刻候補からpatient_numberが一致する予約を探す
+          const fallbackMatched = timeCandidates.find(
+            (reservation) => matchedPatientNumbers.has(reservation.patient_number)
+          );
+
+          if (fallbackMatched) {
+            return fallbackMatched;
+          }
+        }
+      }
+    })(result.data.reservations);
 
     if (!matched) {
       return null;
