@@ -105,6 +105,7 @@ tar -czf "$TEMP_DIR/$TARBALL_NAME" \
     --exclude='node_modules' \
     --exclude='.git' \
     --exclude='dist' \
+    --exclude='.env' \
     --exclude='screenshots/*' \
     --exclude='input/*' \
     --exclude='output/*' \
