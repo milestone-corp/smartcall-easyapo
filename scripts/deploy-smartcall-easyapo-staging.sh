@@ -7,7 +7,7 @@
 #
 # 前提条件:
 #   - SSH鍵 (~/.ssh/milestone) が設定されていること
-#   - ステージングサーバー（153.126.214.207）経由で192.168.20.71にアクセスできること
+#   - ステージングサーバー（153.126.214.207）経由で192.168.20.72(RPA03)にアクセスできること
 #
 # 処理内容:
 #   1. ローカルリポジトリの状態確認
@@ -30,7 +30,7 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_PATH="$(dirname "$SCRIPT_DIR")"
 STAGING_SERVER="centos@153.126.214.207"
-RPA_SERVER="centos@192.168.20.71"
+RPA_SERVER="centos@192.168.20.72"
 RPA_REMOTE_PATH="/home/centos/smartcall-easyapo"
 SSH_KEY="$HOME/.ssh/milestone"
 TEMP_DIR="/tmp"
@@ -170,6 +170,6 @@ echo -e "\n${GREEN}========================================${NC}"
 echo -e "${GREEN}ステージングデプロイ完了！${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo -e "デプロイしたコミット: ${GREEN}$CURRENT_COMMIT${NC}"
-echo -e "URL: http://192.168.20.71:3011"
+echo -e "URL: http://192.168.20.72:3011"
 echo -e "\nログを確認する場合:"
 echo -e "  ssh -i ~/.ssh/milestone centos@153.126.214.207 \"ssh -i ~/.ssh/milestone $RPA_SERVER 'sudo docker logs --tail 50 $CONTAINER_NAME'\""
