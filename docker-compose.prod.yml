@@ -40,3 +40,24 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  easyapo-ikeda:
+    build: .
+    container_name: smartcall-easyapo-ikeda
+    env_file:
+      - .env
+    environment:
+      - KEEP_ALIVE_INTERVAL_MS=${KEEP_ALIVE_INTERVAL_MS:-600000}
+    ports:
+      - "3013:3000"
+    volumes:
+      - ./screenshots/ikeda:/app/screenshots
+      - ./input:/app/input
+      - ./output:/app/output
+    restart: unless-stopped
+    command: ["npm", "run", "start"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

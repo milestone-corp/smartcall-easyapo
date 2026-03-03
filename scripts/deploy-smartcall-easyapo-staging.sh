@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# EasyApo RPA デプロイスクリプト
+# EasyApo RPA ステージングデプロイスクリプト
 #
 # 使用方法:
-#   ./scripts/deploy-smartcall-easyapo.sh
+#   ./scripts/deploy-smartcall-easyapo-staging.sh
 #
 # 前提条件:
 #   - SSH鍵 (~/.ssh/milestone) が設定されていること
-#   - RPA01サーバーに/home/alma/smartcall-easyapoが存在すること
+#   - ステージングサーバー（153.126.214.207）経由で192.168.20.71にアクセスできること
 #
 # 処理内容:
 #   1. ローカルリポジトリの状態確認
@@ -30,18 +30,20 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_PATH="$(dirname "$SCRIPT_DIR")"
 STAGING_SERVER="centos@153.126.214.207"
-RPA_SERVER="alma@192.168.20.70"
-RPA_REMOTE_PATH="/home/alma/smartcall-easyapo"
+RPA_SERVER="centos@192.168.20.71"
+RPA_REMOTE_PATH="/home/centos/smartcall-easyapo"
 SSH_KEY="$HOME/.ssh/milestone"
 TEMP_DIR="/tmp"
-TARBALL_NAME="smartcall-easyapo.tar.gz"
-CONTAINER_NAME="smartcall-easyapo"
+TARBALL_NAME="smartcall-easyapo-staging.tar.gz"
+CONTAINER_NAME="smartcall-easyapo-staging"
+COMPOSE_FILE="docker-compose.staging.yml"
 
 echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}EasyApo RPA デプロイスクリプト${NC}"
+echo -e "${BLUE}EasyApo RPA ステージングデプロイスクリプト${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo -e "ローカルパス: $LOCAL_PATH"
 echo -e "リモートパス: $RPA_REMOTE_PATH"
+echo -e "ターゲット:   $RPA_SERVER"
 
 # 1. ローカルリポジトリの確認
 echo -e "\n${YELLOW}[1/6] ローカルリポジトリの確認${NC}"
@@ -118,6 +120,9 @@ echo -e "${GREEN}ステージングサーバーへの転送完了${NC}"
 # 5. ステージングサーバーからRPAサーバーに転送・展開
 echo -e "\n${YELLOW}[5/6] RPAサーバーに転送・展開${NC}"
 
+# リモートディレクトリ作成（初回用）
+ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'mkdir -p $RPA_REMOTE_PATH'"
+
 # RPAサーバーに転送
 ssh -i "$SSH_KEY" "$STAGING_SERVER" "scp -i ~/.ssh/milestone $TEMP_DIR/$TARBALL_NAME $RPA_SERVER:$TEMP_DIR/"
 echo -e "RPAサーバーへの転送完了"
@@ -129,11 +134,11 @@ echo -e "${GREEN}tarball展開完了${NC}"
 # 6. Dockerイメージビルド・コンテナ再起動
 echo -e "\n${YELLOW}[6/6] Dockerイメージビルド・コンテナ再起動${NC}"
 
-# docker-compose.prod.ymlでビルド＆再起動
-ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'cd $RPA_REMOTE_PATH && sudo docker compose -f docker-compose.prod.yml build'"
+# docker-compose.staging.ymlでビルド＆再起動
+ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'cd $RPA_REMOTE_PATH && sudo docker compose -f $COMPOSE_FILE build'"
 echo -e "Dockerイメージビルド完了"
 
-ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'cd $RPA_REMOTE_PATH && sudo docker compose -f docker-compose.prod.yml up -d'"
+ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'cd $RPA_REMOTE_PATH && sudo docker compose -f $COMPOSE_FILE up -d'"
 echo -e "${GREEN}コンテナ起動完了${NC}"
 
 # コンテナ状態確認
@@ -144,22 +149,15 @@ ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'sudo d
 # ヘルスチェック
 echo -e "\n${YELLOW}ヘルスチェック実行中...${NC}"
 sleep 5
-HEALTH_OK=true
-for SERVICE_INFO in "watai:3011" "konishi:3012" "ikeda:3013"; do
-    SERVICE_NAME="${SERVICE_INFO%%:*}"
-    SERVICE_PORT="${SERVICE_INFO##*:}"
-    HEALTH_RESULT=$(ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'curl -s http://localhost:$SERVICE_PORT/health'" 2>/dev/null || echo "failed")
-    if echo "$HEALTH_RESULT" | grep -q '"status":"ok"'; then
-        echo -e "${GREEN}ヘルスチェック ($SERVICE_NAME:$SERVICE_PORT): OK${NC}"
-    else
-        echo -e "${RED}ヘルスチェック ($SERVICE_NAME:$SERVICE_PORT): NG${NC}"
-        echo "$HEALTH_RESULT"
-        HEALTH_OK=false
-    fi
-done
-if [ "$HEALTH_OK" = false ]; then
+HEALTH_RESULT=$(ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'curl -s http://localhost:3011/health'" 2>/dev/null || echo "failed")
+if echo "$HEALTH_RESULT" | grep -q '"status":"ok"'; then
+    echo -e "${GREEN}ヘルスチェック: OK${NC}"
+    echo "$HEALTH_RESULT" | jq . 2>/dev/null || echo "$HEALTH_RESULT"
+else
+    echo -e "${RED}ヘルスチェック: NG${NC}"
+    echo "$HEALTH_RESULT"
     echo -e "\nログを確認してください:"
-    echo -e "  ./scripts/logs.sh"
+    echo -e "  ssh -i ~/.ssh/milestone centos@153.126.214.207 \"ssh -i ~/.ssh/milestone $RPA_SERVER 'sudo docker logs --tail 50 $CONTAINER_NAME'\""
 fi
 
 # クリーンアップ
@@ -169,10 +167,9 @@ ssh -i "$SSH_KEY" "$STAGING_SERVER" "rm -f $TEMP_DIR/$TARBALL_NAME"
 ssh -i "$SSH_KEY" "$STAGING_SERVER" "ssh -i ~/.ssh/milestone $RPA_SERVER 'rm -f $TEMP_DIR/$TARBALL_NAME'"
 
 echo -e "\n${GREEN}========================================${NC}"
-echo -e "${GREEN}デプロイ完了！${NC}"
+echo -e "${GREEN}ステージングデプロイ完了！${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo -e "デプロイしたコミット: ${GREEN}$CURRENT_COMMIT${NC}"
+echo -e "URL: http://192.168.20.71:3011"
 echo -e "\nログを確認する場合:"
-echo -e "  ./scripts/logs.sh"
-echo -e "\nまたは直接:"
-echo -e "  ssh -i ~/.ssh/milestone centos@153.126.214.207 \"ssh -i ~/.ssh/milestone alma@192.168.20.70 'sudo docker logs --tail 50 $CONTAINER_NAME'\""
+echo -e "  ssh -i ~/.ssh/milestone centos@153.126.214.207 \"ssh -i ~/.ssh/milestone $RPA_SERVER 'sudo docker logs --tail 50 $CONTAINER_NAME'\""
