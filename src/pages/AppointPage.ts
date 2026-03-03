@@ -118,6 +118,12 @@ export class AppointPage extends BasePage {
   private static treatmentItemsCacheTime = 0;
   private static readonly TREATMENT_ITEMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
 
+  /** キャッシュをクリア（再ログイン時に呼び出す） */
+  static clearCache(): void {
+    AppointPage.treatmentItemsCache = null;
+    AppointPage.treatmentItemsCacheTime = 0;
+  }
+
   /**
    * アポイント管理台帳ページ
    *

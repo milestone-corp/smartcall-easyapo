@@ -6,6 +6,7 @@
 
 import { BaseBrowserSessionManager, type BaseSessionConfig } from '@smartcall/rpa-sdk';
 import type { Page } from 'playwright';
+import { AppointPage } from '../pages/AppointPage.js';
 import { LoginPage } from '../pages/LoginPage.js';
 
 /** 認証情報型 */
@@ -67,6 +68,8 @@ export class BrowserSessionManager extends BaseBrowserSessionManager {
     if (!this.page) throw new Error('No browser page');
 
     const { credentials, baseUrl } = this.easyApoConfig;
+
+    AppointPage.clearCache();
 
     await this.page.goto(`${baseUrl}/`);
     const loginPage = new LoginPage(this.page);

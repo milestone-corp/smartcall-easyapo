@@ -28,4 +28,12 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-/package-lock.json
+
+# Agent
+## Serena
+.serena
+.serena/cache
+## Claude(Local)
+.claude/debug
+.claude/plugins/cache
+.claude/plugins/CLAUDE.md
