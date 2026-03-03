@@ -955,13 +955,13 @@ export class AppointPage extends BasePage {
         const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
           or_search: 0,
           patient_name: '',
-          patient_name_kana: '',
+          patient_name_kana: params.customerName || '',
           tel: params.customerPhone,
           sort_order: 'patient_number',
         });
 
         return response?.data ?? null;
-      }, { customerPhone });
+      }, { customerPhone, customerName });
 
       console.log(`[DEBUG] createReservation: searchResult keys=${JSON.stringify(searchResult ? Object.keys(searchResult) : null)}, full=${JSON.stringify(searchResult)?.substring(0, 500)}`);
       if (searchResult?.result && searchResult.data?.patients?.length) {
