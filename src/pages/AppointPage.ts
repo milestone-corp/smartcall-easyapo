@@ -44,6 +44,27 @@ dayjs.extend(customParseFormat);
 /** WebSetting APIのデータ部分（キャッシュ用） */
 type WebSettingData = NonNullable<WebSettingResponse['data']>;
 
+/** 電話番号から数字のみを抽出する */
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
+/** 電話番号の下4桁を取得する */
+function phoneLast4(phone: string): string {
+  const digits = normalizePhone(phone);
+  return digits.slice(-4);
+}
+
+/** 電話番号の末尾一致で比較する（市外局番の有無やハイフンの表記揺れを吸収、最低6桁必要） */
+function phoneEndsWith(registered: string, input: string): boolean {
+  const regDigits = normalizePhone(registered);
+  const inputDigits = normalizePhone(input);
+  const shorter = regDigits.length < inputDigits.length ? regDigits : inputDigits;
+  const longer = regDigits.length < inputDigits.length ? inputDigits : regDigits;
+  if (shorter.length < 6) return false;
+  return longer.endsWith(shorter);
+}
+
 /**
  * 予約リクエスト（SDKの型を拡張してdeleteオペレーションを追加）
  */
@@ -747,6 +768,30 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * 患者検索結果から電話番号が一致する患者を探す
+   * tel1の末尾一致で見つからない場合、患者詳細を取得してtel2も確認する
+   */
+  private async findPatientByPhone(
+    candidates: PatientSearchItem[],
+    customerPhone: string
+  ): Promise<PatientSearchItem | undefined> {
+    // tel1の末尾一致で探す
+    const tel1Match = candidates.find(
+      (p) => p.tel1 && phoneEndsWith(p.tel1, customerPhone)
+    );
+    if (tel1Match) return tel1Match;
+
+    // tel1で見つからない場合、各候補の詳細を取得してtel2を確認
+    for (const candidate of candidates) {
+      const detail = await this.getPatientDetail(candidate.id);
+      if (detail?.data?.tel2 && phoneEndsWith(detail.data.tel2, customerPhone)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Web予約設定を取得（キャッシュ付き）
    * web_accept_time は日〜土（index 0=日, 1=月, ..., 6=土）の7要素
    */
@@ -809,7 +854,8 @@ export class AppointPage extends BasePage {
       (response) => response.url().includes('/patients?') && response.request().method() === 'GET'
     );
 
-    // SideMainで患者検索を実行
+    // SideMainで患者検索を実行（下4桁で検索）
+    const telLast4 = phoneLast4(customerPhone);
     {
       await using sideMain = await this.getVueComponent('SideMain');
       await sideMain?.evaluate((comp, phone) => {
@@ -817,7 +863,7 @@ export class AppointPage extends BasePage {
           comp.s_q = phone;
           comp.clickSearch();
         }
-      }, customerPhone);
+      }, telLast4);
     }
 
     // 患者検索APIのレスポンスを取得
@@ -832,10 +878,18 @@ export class AppointPage extends BasePage {
       return await this.searchReservationsByMemo(dateFrom, dateTo, customerPhone);
     }
 
-    // 電話番号が一致する患者をすべて検索（tel1またはtel2、家族など複数人の可能性あり）
-    const matchedPatients = patientsData.data.patients.filter(
-      (patient: PatientSearchItem) => patient.tel1 === customerPhone || patient.tel2 === customerPhone
-    );
+    // 電話番号の末尾一致で絞り込み（tel1 → tel2の順で確認、家族など複数人の可能性あり）
+    const matchedPatients: PatientSearchItem[] = [];
+    for (const patient of patientsData.data.patients) {
+      if (patient.tel1 && phoneEndsWith(patient.tel1, customerPhone)) {
+        matchedPatients.push(patient);
+      } else {
+        const detail = await this.getPatientDetail(patient.id);
+        if (detail?.data?.tel2 && phoneEndsWith(detail.data.tel2, customerPhone)) {
+          matchedPatients.push(patient);
+        }
+      }
+    }
 
     // 電話番号が一致する患者がいない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
     if (matchedPatients.length === 0) {
@@ -1054,6 +1108,8 @@ export class AppointPage extends BasePage {
     console.log(`[DEBUG] createReservation: patientSearch check: patientId=${patientId}, customerName=${customerName}, customerPhone=${customerPhone}`);
     if (!patientId && customerPhone) {
       console.log(`[DEBUG] createReservation: searching patient by phone=${customerPhone}`);
+      // 電話番号の下4桁で検索し、結果を電話番号の末尾一致で絞り込む
+      const telLast4 = phoneLast4(customerPhone);
       await using reserveDay = await this.getVueComponent('ReserveDay');
       const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
         if (!reserveDay) return null;
@@ -1062,18 +1118,23 @@ export class AppointPage extends BasePage {
           or_search: 0,
           patient_name: '',
           patient_name_kana: params.customerName || '',
-          tel: params.customerPhone,
+          tel: params.telLast4,
           sort_order: 'patient_number',
         });
 
         return response?.data ?? null;
-      }, { customerPhone, customerName });
+      }, { telLast4, customerName });
 
       console.log(`[DEBUG] createReservation: searchResult keys=${JSON.stringify(searchResult ? Object.keys(searchResult) : null)}, full=${JSON.stringify(searchResult)?.substring(0, 500)}`);
       if (searchResult?.result && searchResult.data?.patients?.length) {
-        const matchedPatient = searchResult.data.patients[0];
-        patientId = matchedPatient?.patient_number;
-        console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}`);
+        // 電話番号の末尾一致で絞り込み（tel1 → tel2の順で確認）
+        const matchedPatient = await this.findPatientByPhone(searchResult.data.patients, customerPhone);
+        if (matchedPatient) {
+          patientId = matchedPatient.patient_number;
+          console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}`);
+        } else {
+          console.log(`[DEBUG] createReservation: no patient matched by phone (candidates=${searchResult.data.patients.length})`);
+        }
       } else {
         console.log(`[DEBUG] createReservation: no patient found`);
       }
@@ -1690,7 +1751,8 @@ export class AppointPage extends BasePage {
       });
 
       if (timeCandidates.length > 0) {
-        // 電話番号で患者を検索し、patient_numberでマッチング
+        // 電話番号の下4桁で患者を検索し、末尾一致で絞り込んでpatient_numberでマッチング
+        const telLast4 = phoneLast4(customerPhone);
         await using reserveDayHandle2 = await this.getVueComponent('ReserveDay');
         const searchResult = await reserveDayHandle2?.evaluate(async (reserveDay, params) => {
           if (!reserveDay) return null;
@@ -1698,18 +1760,27 @@ export class AppointPage extends BasePage {
             or_search: 0,
             patient_name: '',
             patient_name_kana: '',
-            tel: params.customerPhone,
+            tel: params.telLast4,
             sort_order: 'patient_number',
           });
           return response?.data ?? null;
-        }, { customerPhone }) ?? null;
+        }, { telLast4 }) ?? null;
 
         if (searchResult?.result && searchResult.data?.patients?.length) {
-          // APIがtel検索で返した患者のpatient_numberを収集
-          // （tel1/tel2がnullでもAPI側で電話番号照合済み）
+          // 電話番号の末尾一致で絞り込んだ患者のpatient_numberを収集（tel1 → tel2の順で確認）
+          const phoneMatchedPatients: PatientSearchItem[] = [];
+          for (const p of searchResult.data.patients) {
+            if (p.tel1 && phoneEndsWith(p.tel1, customerPhone)) {
+              phoneMatchedPatients.push(p);
+            } else {
+              const detail = await this.getPatientDetail(p.id);
+              if (detail?.data?.tel2 && phoneEndsWith(detail.data.tel2, customerPhone)) {
+                phoneMatchedPatients.push(p);
+              }
+            }
+          }
           const matchedPatientNumbers = new Set(
-            searchResult.data.patients
-              .map((p) => p.patient_number)
+            phoneMatchedPatients.map((p) => p.patient_number)
           );
 
           // 時刻候補からpatient_numberが一致する予約を探す
