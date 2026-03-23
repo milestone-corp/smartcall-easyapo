@@ -1,0 +1,21 @@
+services:
+  easyapo-beans-shika:
+    build: .
+    container_name: beans-shika
+    env_file:
+      - .env
+    environment:
+      - KEEP_ALIVE_INTERVAL_MS=${KEEP_ALIVE_INTERVAL_MS:-600000}
+    ports:
+      - "3011:3000"
+    volumes:
+      - ./screenshots/beans-shika:/app/screenshots
+      - ./input:/app/input
+      - ./output:/app/output
+    restart: unless-stopped
+    command: ["npm", "run", "start"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
