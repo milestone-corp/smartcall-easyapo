@@ -664,3 +664,41 @@ export type PatientsOrSearchResponse = ApiResponse<{
   /** 検索結果の患者一覧 */
   patients: PatientSearchItem[];
 }>
+
+/** Web予約受付時間（曜日ごと） */
+export type WebAcceptTime = {
+  /** 受付開始時刻（HH:MM形式） */
+  web_accept_time_from: string;
+  /** 受付終了時刻（HH:MM形式） */
+  web_accept_time_to: string;
+}
+
+/** Web予約設定レスポンス */
+export type WebSettingResponse = ApiResponse<{
+  /** Web予約受付中フラグ（1=受付中） */
+  accepting_web: number;
+  /** Web予約変更受付（"0"=不可） */
+  accept_web_modify: string;
+  /** 受付患者タイプ */
+  accept_patient_type: string[];
+  /** Web予約で使用するカラムID */
+  use_column: number[];
+  /** 予約締切（何時間前まで受付可能か、例: "48" = 48時間前まで） */
+  reservation_deadline: string | null;
+  /** 表示開始日（何日後から表示するか） */
+  display_from_day: number;
+  /** 表示日数 */
+  display_days: number | null;
+  /** 表示月数 */
+  display_to_month: number;
+  /** 表示時間単位（分） */
+  display_time_unit: number;
+  /** 診療時間（分） */
+  treatment_time: number;
+  /** Web予約受付時間（日〜土の7要素） */
+  web_accept_time: WebAcceptTime[];
+  /** Web予約上限 */
+  web_reservation_limit: string;
+  /** Web予約上限数 */
+  web_reservation_limit_count: number;
+}>

@@ -33,11 +33,16 @@ import type {
   CancelAdd,
   ClosedDayCalendar,
   VueComponent,
+  WebSettingResponse,
+  WebAcceptTime,
 } from '../types/easyapo.d.ts';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 
 dayjs.extend(customParseFormat);
+
+/** WebSetting APIのデータ部分（キャッシュ用） */
+type WebSettingData = NonNullable<WebSettingResponse['data']>;
 
 /**
  * 予約リクエスト（SDKの型を拡張してdeleteオペレーションを追加）
@@ -122,10 +127,16 @@ export class AppointPage extends BasePage {
   private static treatmentItemsCacheTime = 0;
   private static readonly TREATMENT_ITEMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
 
+  private static webSettingCache: WebSettingData | null = null;
+  private static webSettingCacheTime = 0;
+  private static readonly WEB_SETTING_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
+
   /** キャッシュをクリア（再ログイン時に呼び出す） */
   static clearCache(): void {
     AppointPage.treatmentItemsCache = null;
     AppointPage.treatmentItemsCacheTime = 0;
+    AppointPage.webSettingCache = null;
+    AppointPage.webSettingCacheTime = 0;
   }
 
   /**
@@ -442,9 +453,14 @@ export class AppointPage extends BasePage {
   private getAvailableSlotsForDate(
     dateStr: string,
     dayData: NonNullable<Awaited<ReturnType<typeof this.getReserveDayData>>>,
-    resources: string[] | undefined,
-    duration: number | undefined
+    options: {
+      resources?: string[];
+      duration?: number;
+      acceptTime?: WebAcceptTime;
+      reservationDeadlineHours?: number | null;
+    }
   ): SlotInfo[] {
+    const { resources, duration, acceptTime, reservationDeadlineHours } = options;
     const slots: SlotInfo[] = [];
 
     // 急患枠を除外した担当者リスト
@@ -462,6 +478,10 @@ export class AppointPage extends BasePage {
     // 診療時間を数値形式に変換（HHMM形式）
     const startTimeNum = String(dayData.start_hour).padStart(2, '0') + String(dayData.start_minute).padStart(2, '0');
     const endTimeNum = String(dayData.end_hour).padStart(2, '0') + String(dayData.end_minute).padStart(2, '0');
+
+    // Web予約受付時間による制限（HHMM形式に変換）
+    const acceptFromNum = acceptTime ? acceptTime.web_accept_time_from.replace(':', '') : null;
+    const acceptToNum = acceptTime ? acceptTime.web_accept_time_to.replace(':', '') : null;
 
     // 必要な連続枠数を計算（15分刻み）
     const requiredSlots = duration ? Math.ceil(duration / 15) : 1;
@@ -485,6 +505,17 @@ export class AppointPage extends BasePage {
 
       // 現在時刻より過去の枠はスキップ
       if (`${dateStr} ${timeRow.time_num}` < nowDateTimeNum) continue;
+
+      // reservation_deadline: 予約時刻のn時間前を過ぎていたらスキップ
+      if (reservationDeadlineHours != null) {
+        const slotDateTime = dayjs(`${dateStr} ${timeRow.hour}:${timeRow.minute}`, 'YYYY-MM-DD H:m').tz('Asia/Tokyo', true);
+        if (nowJst.isAfter(slotDateTime.subtract(reservationDeadlineHours, 'hour'))) continue;
+      }
+
+      // Web予約受付時間の範囲外はスキップ
+      if (acceptFromNum && acceptToNum) {
+        if (timeRow.time_num < acceptFromNum || timeRow.time_num >= acceptToNum) continue;
+      }
 
       // 休憩時間はスキップ
       if (this.isBreakTime(timeRow)) continue;
@@ -544,6 +575,11 @@ export class AppointPage extends BasePage {
   }): Promise<SlotInfo[]> {
     const perfStart = Date.now();
     this.step(`getAvailableSlots: start (${dateFrom} - ${dateTo})`);
+    // Web予約設定を取得
+    const webSetting = await this.getWebSetting();
+    console.log(`[PERF] getWebSetting: ${Date.now() - perfStart}ms`);
+    const webAcceptTimes = webSetting?.web_accept_time ?? null;
+
     // メニューから診療メニュー情報を取得
     const matchedItem = await this.findTreatmentItem(menu);
     console.log(`[PERF] findTreatmentItem: ${Date.now() - perfStart}ms`);
@@ -572,8 +608,20 @@ export class AppointPage extends BasePage {
     effectiveDuration ??= 45
 
     const slots: SlotInfo[] = [];
+    const nowJst = dayjs().tz('Asia/Tokyo');
     const startDate = dayjs(dateFrom);
     const endDate = dayjs(dateTo);
+
+    // display_from_dayによる開始日制限（n日後から予約可能）
+    const displayFromDay = webSetting?.display_from_day;
+    const earliestDate = displayFromDay != null
+      ? nowJst.startOf('day').add(displayFromDay, 'day')
+      : null;
+
+    // reservation_deadlineによる時間制限（n時間前まで受付可能）
+    const reservationDeadlineHours = webSetting?.reservation_deadline != null
+      ? parseInt(webSetting.reservation_deadline, 10)
+      : null;
 
     // 休診日データをキャッシュ（最初の日付取得時に保存）
     let cachedClosedDays: ClosedDayCalendar[] | null = null;
@@ -582,6 +630,13 @@ export class AppointPage extends BasePage {
     while (currentDate.isBefore(endDate) || currentDate.isSame(endDate, 'day')) {
       const dateStr = currentDate.format('YYYY-MM-DD');
       const loopStart = Date.now();
+
+      // display_from_dayによる日付制限チェック
+      if (earliestDate && currentDate.isBefore(earliestDate, 'day')) {
+        console.log(`[PERF] date=${dateStr}: SKIPPED (within display_from_day=${displayFromDay})`);
+        currentDate = currentDate.add(1, 'day');
+        continue;
+      }
 
       // キャッシュされた休診日データがあれば、事前に休診日をスキップ（APIコール不要）
       if (cachedClosedDays && this.isClosedDay(dateStr, cachedClosedDays)) {
@@ -613,7 +668,11 @@ export class AppointPage extends BasePage {
           continue;
         }
 
-        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, effectiveResources, effectiveDuration);
+        // 曜日に対応するWeb予約受付時間を取得（0=日, 1=月, ..., 6=土）
+        const dayOfWeek = currentDate.day();
+        const acceptTime = webAcceptTimes?.[dayOfWeek];
+
+        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, { resources: effectiveResources, duration: effectiveDuration, acceptTime, reservationDeadlineHours });
         console.log(`[PERF] date=${dateStr}: ${daySlots.length} slots found`);
         slots.push(...daySlots);
       }
@@ -685,6 +744,30 @@ export class AppointPage extends BasePage {
       );
       return response?.data ?? null;
     }, patientId) ?? null;
+  }
+
+  /**
+   * Web予約設定を取得（キャッシュ付き）
+   * web_accept_time は日〜土（index 0=日, 1=月, ..., 6=土）の7要素
+   */
+  private async getWebSetting(): Promise<WebSettingData | null> {
+    const now = Date.now();
+    if (AppointPage.webSettingCache && (now - AppointPage.webSettingCacheTime) < AppointPage.WEB_SETTING_CACHE_TTL_MS) {
+      return AppointPage.webSettingCache;
+    }
+
+    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+    const result = await reserveDayHandle?.evaluate(async (reserveDay) => {
+      if (!reserveDay) return null;
+      const response = await reserveDay.get<WebSettingResponse>('/websetting', {});
+      return response?.data?.data ?? null;
+    }) ?? null;
+
+    if (result) {
+      AppointPage.webSettingCache = result;
+      AppointPage.webSettingCacheTime = now;
+    }
+    return result;
   }
 
   /**
@@ -1273,6 +1356,47 @@ export class AppointPage extends BasePage {
     for (const reservation of reservations) {
       this.step(`processReservations: processing ${reservation.operation} (${reservation.reservation_id})`);
       if (reservation.operation === 'create') {
+        // Web予約設定による予約可能期間チェック
+        const webSetting = await this.getWebSetting();
+        if (webSetting) {
+          const nowJst = dayjs().tz('Asia/Tokyo');
+          const slotDateTime = dayjs(`${reservation.slot.date} ${reservation.slot.start_at}`, 'YYYY-MM-DD HH:mm').tz('Asia/Tokyo', true);
+
+          // display_from_day: n日後からのみ予約可能
+          if (webSetting.display_from_day != null) {
+            const earliestDate = nowJst.startOf('day').add(webSetting.display_from_day, 'day');
+            if (slotDateTime.isBefore(earliestDate)) {
+              results.push({
+                reservation_id: reservation.reservation_id,
+                operation: 'create',
+                result: {
+                  status: 'failed',
+                  error_code: 'INVALID_REQUEST',
+                  error_message: `予約可能期間外です（${webSetting.display_from_day}日後以降のみ予約可能）`,
+                },
+              });
+              continue;
+            }
+          }
+
+          // reservation_deadline: 予約時刻のn時間前まで受付可能
+          if (webSetting.reservation_deadline != null) {
+            const deadlineHours = parseInt(webSetting.reservation_deadline, 10);
+            if (!isNaN(deadlineHours) && nowJst.isAfter(slotDateTime.subtract(deadlineHours, 'hour'))) {
+              results.push({
+                reservation_id: reservation.reservation_id,
+                operation: 'create',
+                result: {
+                  status: 'failed',
+                  error_code: 'INVALID_REQUEST',
+                  error_message: `予約締切を過ぎています（予約時刻の${deadlineHours}時間前まで受付可能）`,
+                },
+              });
+              continue;
+            }
+          }
+        }
+
         // notesの[patient]タグによる患者検証
         if (reservation.notes && reservation.customer.customer_id) {
           const patientTagMatch = reservation.notes.match(/\[patient\](.*?)\[\/patient\]/);
