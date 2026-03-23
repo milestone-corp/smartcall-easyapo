@@ -53,6 +53,10 @@ export type ReservationRequest = Omit<ReservationRequestBase, 'operation'> & {
         time?: string,
     },
   }
+  /** リソースID候補（複数指定時、この中から空きスタッフを自動選択） */
+  resource_ids?: string[];
+  /** 備考 */
+  notes?: string;
 };
 
 /**
@@ -508,6 +512,19 @@ export class AppointPage extends BasePage {
     }
 
     return slots;
+  }
+
+  /**
+   * リソースIDの配列からリソース名の配列に変換する
+   * column_rows（担当者カラム）のidとnameを照合して解決する
+   */
+  async resolveResourceIds(resourceIds: string[]): Promise<string[]> {
+    const dayData = await this.getReserveDayData();
+    if (!dayData) return [];
+    const idSet = new Set(resourceIds.map(id => Number(id)));
+    return dayData.column_rows
+      .filter(col => idSet.has(col.id))
+      .map(col => col.name);
   }
 
   /**
@@ -1185,7 +1202,8 @@ export class AppointPage extends BasePage {
   private async findAvailableStaff(
     timeFrom: string,
     durationMin: number,
-    menu?: MenuInfo
+    menu?: MenuInfo,
+    resourceIds?: string[]
   ): Promise<number | null> {
     // 予約日のデータを取得
     const dayData = await this.getReserveDayData();
@@ -1195,6 +1213,14 @@ export class AppointPage extends BasePage {
     let availableColumns = dayData.column_rows.filter(
       (col) => col.name !== '急患'
     );
+
+    // リソースIDが指定されている場合、その候補に絞り込む
+    if (resourceIds?.length) {
+      const idSet = new Set(resourceIds.map(id => Number(id)));
+      availableColumns = availableColumns.filter(
+        (col) => idSet.has(col.id)
+      );
+    }
 
     // メニューが指定されている場合、対応可能な担当者で絞り込む
     const matchedItem = await this.findTreatmentItem(menu);
@@ -1247,6 +1273,40 @@ export class AppointPage extends BasePage {
     for (const reservation of reservations) {
       this.step(`processReservations: processing ${reservation.operation} (${reservation.reservation_id})`);
       if (reservation.operation === 'create') {
+        // notesの[patient]タグによる患者検証
+        if (reservation.notes && reservation.customer.customer_id) {
+          const patientTagMatch = reservation.notes.match(/\[patient\](.*?)\[\/patient\]/);
+          if (patientTagMatch) {
+            const tagContent = patientTagMatch[1];
+            const birthdayMatch = tagContent.match(/birthday:\s*(\S+)/);
+            const idMatch = tagContent.match(/id:\s*(\S+)/);
+            const tagBirthday = birthdayMatch?.[1]?.replace(/,\s*$/, '');
+            const tagPatientId = idMatch?.[1]?.replace(/,\s*$/, '');
+
+            const patientDetail = await this.getPatientDetail(Number(reservation.customer.customer_id));
+            if (patientDetail?.data) {
+              const idMismatch = tagPatientId && String(patientDetail.data.id) !== tagPatientId;
+              const birthdayMismatch = tagBirthday && patientDetail.data.birthday !== tagBirthday;
+              if (idMismatch || birthdayMismatch) {
+                const mismatches: string[] = [];
+                if (idMismatch) mismatches.push(`patient_id(期待:${tagPatientId}, 実際:${patientDetail.data.id})`);
+                if (birthdayMismatch) mismatches.push(`birthday(期待:${tagBirthday}, 実際:${patientDetail.data.birthday})`);
+                console.log(`患者情報が一致しません。 ${mismatches.join(', ')}`)
+                results.push({
+                  reservation_id: reservation.reservation_id,
+                  operation: 'create',
+                  result: {
+                    status: 'failed',
+                    error_code: 'INVALID_REQUEST',
+                    error_message: `患者情報が一致しません`,
+                  },
+                });
+                continue;
+              }
+            }
+          }
+        }
+
         // 予約日を読み込む（担当者検索のため）
         await this.selectDate(reservation.slot.date);
 
@@ -1269,7 +1329,8 @@ export class AppointPage extends BasePage {
           const availableStaffId = await this.findAvailableStaff(
             reservation.slot.start_at,
             effectiveDuration,
-            reservation.menu
+            reservation.menu,
+            reservation.resource_ids
           );
 
           if (!availableStaffId) {

@@ -250,6 +250,8 @@ type SlotsQuery = Record<string, string | undefined> & {
   external_menu_id?: string;
   /** メニュー名 - オプション */
   menu_name?: string;
+  /** リソースID（カンマ区切り） - オプション */
+  resource_ids?: string;
 }
 
 app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQuery>, res: Response) => {
@@ -273,6 +275,8 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
     external_menu_id: req.query.external_menu_id,
     menu_name: req.query.menu_name || '',
   } : undefined;
+  const resourceIdsParam = req.query.resource_ids;
+  const resourceIds = resourceIdsParam ? resourceIdsParam.split(',').map(r => r.trim()).filter(Boolean) : undefined;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   try {
@@ -295,8 +299,20 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
       const appointPage = new AppointPage(page, screenshot);
       await appointPage.navigate(BASE_URL);
 
+      // resourceIdsが指定されている場合、リソース名に変換してresourcesにマージ
+      let effectiveResources = resources;
+      if (resourceIds?.length) {
+        const resolvedNames = await appointPage.resolveResourceIds(resourceIds);
+        if (effectiveResources?.length) {
+          const resolvedSet = new Set(resolvedNames);
+          effectiveResources = effectiveResources.filter(r => resolvedSet.has(r));
+        } else {
+          effectiveResources = resolvedNames;
+        }
+      }
+
       // 空き枠を取得
-      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources, duration, menu });
+      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources: effectiveResources, duration, menu });
 
       // テストモードの場合はスクリーンショットを取得
       let screenshotBase64: string | undefined;
@@ -557,6 +573,10 @@ type ReservationCreateBody = {
   menu_name?: string;
   /** 外部メニューID - オプション */
   external_menu_id?: string;
+  /** リソースID - オプション */
+  resource_ids?: string[] | string;
+  /** 備考 - オプション */
+  notes?: string;
 }
 
 app.post('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationCreateBody>, res: Response) => {
@@ -570,7 +590,10 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
     return;
   }
 
-  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name, external_menu_id } = req.body;
+  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name, external_menu_id, resource_ids: rawResourceIds, notes } = req.body;
+  const resource_ids = rawResourceIds == null ? undefined
+    : Array.isArray(rawResourceIds) ? rawResourceIds
+    : rawResourceIds.split(',').map((s) => s.trim()).filter(Boolean);
   console.log(`[DEBUG] POST /reservations: req.body=${JSON.stringify(req.body)}`);
   console.log(`[DEBUG] POST /reservations: external_menu_id=${external_menu_id}, menu_name=${menu_name}`);
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
@@ -619,7 +642,11 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
         },
         customer: { customer_id: String(customer_id  || ''), name: customer_name, phone: customer_phone },
         menu: { menu_id: '', external_menu_id: external_menu_id || '', menu_name: menu_name || '' },
-        staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
+        staff: resource_ids?.length === 1
+          ? { staff_id: resource_ids[0], external_staff_id: '', resource_name: '', preference: 'specific' as const }
+          : { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
+        resource_ids: resource_ids?.length && resource_ids.length > 1 ? resource_ids : undefined,
+        notes,
       }] satisfies ReservationRequest[];
 
       const results = await appointPage.processReservations(reservations);
@@ -649,6 +676,9 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
       error_code: result.processResult.result.error_code,
       timing: { total_ms: Date.now() - startTime },
     };
+    if (response.error && !response.message) {
+      response.message = response.error;
+    }
 
     if (result.screenshotBase64) {
       response.screenshot = result.screenshotBase64;
