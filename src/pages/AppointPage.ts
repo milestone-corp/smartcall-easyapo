@@ -1408,39 +1408,45 @@ export class AppointPage extends BasePage {
             const tagPatientNumber = idMatch?.[1]?.replace(/,\s*$/, '');
 
             if (tagPatientNumber) {
-              // 患者番号で検索
+              // 患者番号で直接検索（/patients/number/{patient_number}）
               await using reserveDay = await this.getVueComponent('ReserveDay');
-              const searchResult = await reserveDay?.evaluate(async (rd, params) => {
+              const patientResult = await reserveDay?.evaluate(async (rd, patientNumber) => {
                 if (!rd) return null;
-                const response = await rd.get<PatientsOrSearchResponse>('/patients', {
-                  or_search: 0,
-                  patient_name: '',
-                  patient_name_kana: '',
-                  tel: '',
-                  patient_number: params.patientNumber,
-                  sort_order: 'patient_number',
-                });
+                const response = await rd.get<PatientDetailResponse>(
+                  `/patients/number/${patientNumber}`,
+                  {}
+                );
                 return response?.data ?? null;
-              }, { patientNumber: tagPatientNumber });
+              }, tagPatientNumber) ?? null;
 
-              const matchedPatient = searchResult?.data?.patients?.find(
-                (p) => p.patient_number === tagPatientNumber && (!tagBirthday || p.birthday === tagBirthday)
-              );
-
-              if (matchedPatient) {
-                // 患者番号+生年月日で特定できた → customer_idを上書き
-                console.log(`[DEBUG] [patient]タグで患者特定: patient_number=${tagPatientNumber}, id=${matchedPatient.id}`);
-                reservation.customer.customer_id = matchedPatient.patient_number;
+              if (patientResult?.result && patientResult.data) {
+                // 生年月日の一致チェック
+                if (tagBirthday && patientResult.data.birthday !== tagBirthday) {
+                  console.log(`[DEBUG] [patient]タグ: 生年月日不一致 (期待:${tagBirthday}, 実際:${patientResult.data.birthday})`);
+                  results.push({
+                    reservation_id: reservation.reservation_id,
+                    operation: 'create',
+                    result: {
+                      status: 'failed',
+                      error_code: 'INVALID_REQUEST',
+                      error_message: `患者情報が一致しません（患者番号: ${tagPatientNumber}, 生年月日不一致）`,
+                    },
+                  });
+                  continue;
+                }
+                // 患者番号で特定できた → customer_idを上書き
+                console.log(`[DEBUG] [patient]タグで患者特定: patient_number=${tagPatientNumber}, id=${patientResult.data.id}`);
+                reservation.customer.customer_id = tagPatientNumber;
               } else {
-                // 患者番号+生年月日で特定できない → エラー
-                console.log(`[DEBUG] [patient]タグで患者特定失敗: patient_number=${tagPatientNumber}, birthday=${tagBirthday}`);
+                // 患者番号が見つからない → エラー
+                console.log(`[DEBUG] [patient]タグで患者特定失敗: patient_number=${tagPatientNumber}`);
                 results.push({
                   reservation_id: reservation.reservation_id,
                   operation: 'create',
                   result: {
                     status: 'failed',
                     error_code: 'INVALID_REQUEST',
-                    error_message: '患者情報が一致しません',
+                    error_message: `患者が見つかりません（患者番号: ${tagPatientNumber}）`,
                   },
                 });
                 continue;
