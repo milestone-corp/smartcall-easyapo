@@ -1397,32 +1397,50 @@ export class AppointPage extends BasePage {
           }
         }
 
-        // notesの[patient]タグによる患者検証
-        if (reservation.notes && reservation.customer.customer_id) {
+        // notesの[patient]タグによる患者特定（patient_number + birthdayで検索）
+        if (reservation.notes) {
           const patientTagMatch = reservation.notes.match(/\[patient\](.*?)\[\/patient\]/);
           if (patientTagMatch) {
             const tagContent = patientTagMatch[1];
             const birthdayMatch = tagContent.match(/birthday:\s*(\S+)/);
             const idMatch = tagContent.match(/id:\s*(\S+)/);
             const tagBirthday = birthdayMatch?.[1]?.replace(/,\s*$/, '');
-            const tagPatientId = idMatch?.[1]?.replace(/,\s*$/, '');
+            const tagPatientNumber = idMatch?.[1]?.replace(/,\s*$/, '');
 
-            const patientDetail = await this.getPatientDetail(Number(reservation.customer.customer_id));
-            if (patientDetail?.data) {
-              const idMismatch = tagPatientId && String(patientDetail.data.id) !== tagPatientId;
-              const birthdayMismatch = tagBirthday && patientDetail.data.birthday !== tagBirthday;
-              if (idMismatch || birthdayMismatch) {
-                const mismatches: string[] = [];
-                if (idMismatch) mismatches.push(`patient_id(期待:${tagPatientId}, 実際:${patientDetail.data.id})`);
-                if (birthdayMismatch) mismatches.push(`birthday(期待:${tagBirthday}, 実際:${patientDetail.data.birthday})`);
-                console.log(`患者情報が一致しません。 ${mismatches.join(', ')}`)
+            if (tagPatientNumber) {
+              // 患者番号で検索
+              await using reserveDay = await this.getVueComponent('ReserveDay');
+              const searchResult = await reserveDay?.evaluate(async (rd, params) => {
+                if (!rd) return null;
+                const response = await rd.get<PatientsOrSearchResponse>('/patients', {
+                  or_search: 0,
+                  patient_name: '',
+                  patient_name_kana: '',
+                  tel: '',
+                  patient_number: params.patientNumber,
+                  sort_order: 'patient_number',
+                });
+                return response?.data ?? null;
+              }, { patientNumber: tagPatientNumber });
+
+              const matchedPatient = searchResult?.data?.patients?.find(
+                (p) => p.patient_number === tagPatientNumber && (!tagBirthday || p.birthday === tagBirthday)
+              );
+
+              if (matchedPatient) {
+                // 患者番号+生年月日で特定できた → customer_idを上書き
+                console.log(`[DEBUG] [patient]タグで患者特定: patient_number=${tagPatientNumber}, id=${matchedPatient.id}`);
+                reservation.customer.customer_id = matchedPatient.patient_number;
+              } else {
+                // 患者番号+生年月日で特定できない → エラー
+                console.log(`[DEBUG] [patient]タグで患者特定失敗: patient_number=${tagPatientNumber}, birthday=${tagBirthday}`);
                 results.push({
                   reservation_id: reservation.reservation_id,
                   operation: 'create',
                   result: {
                     status: 'failed',
                     error_code: 'INVALID_REQUEST',
-                    error_message: `患者情報が一致しません`,
+                    error_message: '患者情報が一致しません',
                   },
                 });
                 continue;
