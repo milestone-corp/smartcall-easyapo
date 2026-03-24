@@ -533,8 +533,8 @@ export class AppointPage extends BasePage {
         if (nowJst.isAfter(slotDateTime.subtract(reservationDeadlineHours, 'hour'))) continue;
       }
 
-      // Web予約受付時間の範囲外はスキップ
-      if (acceptFromNum && acceptToNum) {
+      // Web予約受付時間の範囲外はスキップ（00:00～00:00は制限なし）
+      if (acceptFromNum && acceptToNum && !(acceptFromNum === '0000' && acceptToNum === '0000')) {
         if (timeRow.time_num < acceptFromNum || timeRow.time_num >= acceptToNum) continue;
       }
 
