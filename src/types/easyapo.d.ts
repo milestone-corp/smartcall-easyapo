@@ -81,7 +81,7 @@ export type ReserveRow = {
   /** 表示色 */
   color: string;
   /** 担当者 */
-  pic: string | null;
+  pic: { id: number; name: string }[] | null;
   /** メモ情報 */
   memo: ReserveMemo[];
   /** 生年月日（YYYY-MM-DD形式） */

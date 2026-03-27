@@ -50,6 +50,24 @@ const BASE_URL = 'https://cieasyapo2.ci-medical.com';
 let sessionManager: BrowserSessionManager | null = null;
 let currentCredentials: Credentials | null = null;
 
+// pic（担当者）コンテキスト: 予約変更でpicが空いていない場合に保持し、空き枠検索で絞り込みに使用
+let picContext: {
+  pics: { id: number; name: string }[];
+  expiresAt: number;
+} | null = null;
+
+const PIC_CONTEXT_TTL_MS = 60 * 1000; // 1分
+
+function getActivePicContext() {
+  if (picContext && Date.now() < picContext.expiresAt) {
+    // 参照時にTTLを延長
+    picContext.expiresAt = Date.now() + PIC_CONTEXT_TTL_MS;
+    return picContext;
+  }
+  picContext = null;
+  return null;
+}
+
 // セッション初期化用Mutex（複数リクエストの競合防止）
 const sessionInitMutex = new Mutex();
 
@@ -311,8 +329,15 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
         }
       }
 
+      // picコンテキストが有効な場合、picIDでフィルタリング
+      const activePicContext = getActivePicContext();
+      const picIds = activePicContext?.pics.map(p => p.id);
+      if (picIds?.length) {
+        console.log(`[Server] GET /slots: applying picContext filter (${activePicContext!.pics.map(p => p.name).join(', ')})`);
+      }
+
       // 空き枠を取得
-      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources: effectiveResources, duration, menu });
+      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources: effectiveResources, duration, menu, picIds });
 
       // テストモードの場合はスクリーンショットを取得
       let screenshotBase64: string | undefined;
@@ -475,6 +500,9 @@ app.get('/reservations/search', async (req: Request<ParamsDictionary, unknown, u
   const dateFrom = req.query.date_from || dayjs().tz('Asia/Tokyo').format('YYYY-MM-DD');
   const dateTo = req.query.date_to || dateFrom;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
+
+  // 予約検索が実行されたらpicコンテキストをリセット
+  picContext = null;
 
   try {
     // セッションを確保
@@ -802,12 +830,28 @@ app.put('/reservations', async (req: Request<ParamsDictionary, unknown, Reservat
       return { processResult, screenshotBase64 };
     }, REQUEST_TIMEOUT_MS);
 
+    const isSuccess = result.processResult.result.status === 'success';
+
+    // picコンテキストの更新
+    if (isSuccess) {
+      // 成功時はクリア
+      picContext = null;
+    } else if (result.processResult.result.pic?.length) {
+      // 担当者が空いていない場合はpicコンテキストを保持
+      picContext = {
+        pics: result.processResult.result.pic,
+        expiresAt: Date.now() + PIC_CONTEXT_TTL_MS,
+      };
+      console.log(`[Server] picContext set: ${result.processResult.result.pic.map(p => p.name).join(', ')} (TTL: 1min)`);
+    }
+
     const response: Record<string, unknown> = {
-      success: result.processResult.result.status === 'success',
+      success: isSuccess,
       reservation_id: result.processResult.reservation_id,
       external_reservation_id: result.processResult.result.external_reservation_id,
-      error: result.processResult.result.status !== 'success' ? result.processResult.result.error_message : undefined,
+      error: isSuccess ? undefined : result.processResult.result.error_message,
       error_code: result.processResult.result.error_code,
+      pic: result.processResult.result.pic,
       timing: { total_ms: Date.now() - startTime },
     };
 

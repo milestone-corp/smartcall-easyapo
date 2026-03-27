@@ -95,6 +95,8 @@ export interface ReservationResultDetail {
   duration_min?: number;
   error_code?: string;
   error_message?: string;
+  /** pic（担当者）情報 - 担当者が空いていない場合に設定 */
+  pic?: { id: number; name: string }[];
 }
 
 /**
@@ -469,6 +471,44 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * 指定したpic（担当者）が指定時間帯に空いているかチェック
+   * columnとは独立に、全カラムの予約を横断してpicの重複を確認する
+   */
+  private isPicAvailable(
+    picIds: number[],
+    timeRows: TimeRow[],
+    startIndex: number,
+    requiredSlots: number,
+    reserveRows: ReserveRow[],
+    excludeReservationId?: number
+  ): boolean {
+    // 連続枠が確保できるかチェック
+    if (!this.areSlotsConsecutive(timeRows, startIndex, requiredSlots)) {
+      return false;
+    }
+
+    const picIdSet = new Set(picIds);
+
+    // 各枠でpicが他の予約に割り当てられていないかチェック
+    for (let j = 0; j < requiredSlots; j++) {
+      const checkTimeRow = timeRows[startIndex + j];
+      const hasConflict = reserveRows.some((reservation) => {
+        if (reservation.cancel === 1) return false;
+        if (excludeReservationId != null && reservation.id === excludeReservationId) return false;
+        // この予約のpicにチェック対象のpicが含まれているか
+        if (!reservation.pic?.some(p => picIdSet.has(p.id))) return false;
+
+        const slotTime = checkTimeRow.time_num;
+        return slotTime >= reservation.time_from_num && slotTime < reservation.time_to_num;
+      });
+
+      if (hasConflict) return false;
+    }
+
+    return true;
+  }
+
+  /**
    * 1日分の空き枠を取得
    */
   private getAvailableSlotsForDate(
@@ -479,9 +519,10 @@ export class AppointPage extends BasePage {
       duration?: number;
       acceptTime?: WebAcceptTime;
       reservationDeadlineHours?: number | null;
+      picIds?: number[];
     }
   ): SlotInfo[] {
-    const { resources, duration, acceptTime, reservationDeadlineHours } = options;
+    const { resources, duration, acceptTime, reservationDeadlineHours, picIds } = options;
     const slots: SlotInfo[] = [];
 
     // 急患枠を除外した担当者リスト
@@ -544,6 +585,11 @@ export class AppointPage extends BasePage {
       // 予約受付不可の時間帯はスキップ
       if (dayData.closed_td_list.includes(timeRow.time_num)) continue;
 
+      // picが指定されている場合、この時間枠でpicが空いているかチェック
+      if (picIds?.length && !this.isPicAvailable(picIds, timeRows, i, requiredSlots, dayData.reserve_rows)) {
+        continue;
+      }
+
       // この時間枠で空いている担当者を探す
       const availableStaff = availableColumns
         .filter((column) =>
@@ -582,7 +628,7 @@ export class AppointPage extends BasePage {
   /**
    * 指定日付の空き枠を取得
    */
-  async getAvailableSlots({ dateFrom, dateTo, resources, duration, menu }: {
+  async getAvailableSlots({ dateFrom, dateTo, resources, duration, menu, picIds }: {
     /** 開始日 (YYYY-MM-DD) */
     dateFrom: string;
     /** 終了日 (YYYY-MM-DD) */
@@ -593,6 +639,8 @@ export class AppointPage extends BasePage {
     duration?: number;
     /** メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整） */
     menu?: MenuInfo;
+    /** pic（担当者）IDの配列。指定時はこれらのpicが全員空いている枠のみを返す */
+    picIds?: number[];
   }): Promise<SlotInfo[]> {
     const perfStart = Date.now();
     this.step(`getAvailableSlots: start (${dateFrom} - ${dateTo})`);
@@ -693,7 +741,7 @@ export class AppointPage extends BasePage {
         const dayOfWeek = currentDate.day();
         const acceptTime = webAcceptTimes?.[dayOfWeek];
 
-        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, { resources: effectiveResources, duration: effectiveDuration, acceptTime, reservationDeadlineHours });
+        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, { resources: effectiveResources, duration: effectiveDuration, acceptTime, reservationDeadlineHours, picIds });
         console.log(`[PERF] date=${dateStr}: ${daySlots.length} slots found`);
         slots.push(...daySlots);
       }
@@ -1606,6 +1654,7 @@ export class AppointPage extends BasePage {
             result: {
               status: 'failed',
               error_message: result.error,
+              pic: result.pic,
             },
           });
         } else {
@@ -1706,7 +1755,7 @@ export class AppointPage extends BasePage {
     date: string,
     time: string,
     customerPhone: string
-  ): Promise<{ reservationId: string; columnNo: number } | null> {
+  ): Promise<{ reservationId: string; columnNo: number; pic: { id: number; name: string }[] | null } | null> {
     // /reservations APIで指定日の予約を取得
     await using reserveDayHandle = await this.getVueComponent('ReserveDay');
     const result = await reserveDayHandle?.evaluate(async (reserveDay, date) => {
@@ -1805,6 +1854,7 @@ export class AppointPage extends BasePage {
     return {
       reservationId: String(matched.id),
       columnNo: matched.column_no,
+      pic: matched.pic ?? null,
     };
   }
 
@@ -1851,7 +1901,7 @@ export class AppointPage extends BasePage {
     customerPhone: string;
     /** 新しいメニュー情報（メモに設定） */
     menu?: MenuInfo;
-  }): Promise<{ reservationId: string } | { error: string }> {
+  }): Promise<{ reservationId: string } | { error: string; pic?: { id: number; name: string }[] }> {
     this.step(`updateReservation: start (${date} ${time}, ${customerPhone})`);
 
     // 1. 予約日を読み込む
@@ -1895,6 +1945,50 @@ export class AppointPage extends BasePage {
     const matchedItem = await this.findTreatmentItem(menu);
     const menuColor = matchedItem?.color;
     const menuTreatmentTime = matchedItem?.treatment_time;
+
+    // 2.5. 日時変更がありpicが設定されている場合、変更先でpicが空いているかチェック
+    if ((desired?.date || desired?.time) && found.pic?.length) {
+      const targetDate = desired.date || date;
+      const targetTime = desired.time || time;
+      const picIds = found.pic.map(p => p.id);
+      const durationMin = menuTreatmentTime ?? 45;
+
+      // 変更先の日付データを取得
+      await this.selectDate(targetDate);
+      const targetDayData = await this.getReserveDayData();
+
+      if (targetDayData) {
+        const startTimeNum = String(targetDayData.start_hour).padStart(2, '0') + String(targetDayData.start_minute).padStart(2, '0');
+        const endTimeNum = String(targetDayData.end_hour).padStart(2, '0') + String(targetDayData.end_minute).padStart(2, '0');
+        const timeRows = targetDayData.time_rows.filter(
+          (tr) => tr.time_num >= startTimeNum && tr.time_num < endTimeNum
+        );
+        const targetTimeNum = targetTime.replace(':', '');
+        const startIndex = timeRows.findIndex((tr) => tr.time_num === targetTimeNum);
+        const requiredSlots = Math.ceil(durationMin / 15);
+
+        if (startIndex !== -1) {
+          const picAvailable = this.isPicAvailable(
+            picIds, timeRows, startIndex, requiredSlots,
+            targetDayData.reserve_rows, Number(found.reservationId)
+          );
+
+          if (!picAvailable) {
+            const picNames = found.pic.map(p => p.name).join('、');
+            this.step(`updateReservation: pic unavailable (${picNames}) at ${targetDate} ${targetTime}`);
+            // 元の日付に戻す
+            await this.selectDate(date);
+            return {
+              error: `担当者（${picNames}）が指定の時間帯（${targetDate} ${targetTime}）に空いていません`,
+              pic: found.pic,
+            };
+          }
+        }
+      }
+
+      // 元の日付に戻してから予約編集ダイアログを開く
+      await this.selectDate(date);
+    }
 
     // 3. 予約編集ダイアログを開く
     await this.openReserveEditDialog(found.reservationId);
