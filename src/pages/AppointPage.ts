@@ -1179,7 +1179,10 @@ export class AppointPage extends BasePage {
         const matchedPatient = await this.findPatientByPhone(searchResult.data.patients, customerPhone);
         if (matchedPatient) {
           patientId = matchedPatient.patient_number;
-          console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}`);
+          if (matchedPatient.name_kana) {
+            customerName = matchedPatient.name_kana;
+          }
+          console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}, name_kana=${matchedPatient.name_kana}`);
         } else {
           console.log(`[DEBUG] createReservation: no patient matched by phone (candidates=${searchResult.data.patients.length})`);
         }
@@ -1543,9 +1546,12 @@ export class AppointPage extends BasePage {
                   });
                   continue;
                 }
-                // 患者番号で特定できた → customer_idを上書き
-                console.log(`[DEBUG] [patient]タグで患者特定: patient_number=${tagPatientNumber}, id=${patientResult.data.id}`);
+                // 患者番号で特定できた → customer_idを上書き、名前をフリガナに置き換え
+                console.log(`[DEBUG] [patient]タグで患者特定: patient_number=${tagPatientNumber}, id=${patientResult.data.id}, name_kana=${patientResult.data.name_kana}`);
                 reservation.customer.customer_id = tagPatientNumber;
+                if (patientResult.data.name_kana) {
+                  reservation.customer.name = patientResult.data.name_kana;
+                }
               } else {
                 // 患者番号が見つからない → エラー
                 console.log(`[DEBUG] [patient]タグで患者特定失敗: patient_number=${tagPatientNumber}`);
