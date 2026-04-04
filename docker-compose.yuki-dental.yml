@@ -1,0 +1,21 @@
+services:
+  easyapo-yuki-dental:
+    build: .
+    container_name: yuki-dental
+    env_file:
+      - .env
+    environment:
+      - KEEP_ALIVE_INTERVAL_MS=${KEEP_ALIVE_INTERVAL_MS:-600000}
+    ports:
+      - "3012:3000"
+    volumes:
+      - ./screenshots/yuki-dental:/app/screenshots
+      - ./input:/app/input
+      - ./output:/app/output
+    restart: unless-stopped
+    command: ["npm", "run", "start"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
