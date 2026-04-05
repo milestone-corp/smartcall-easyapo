@@ -33,11 +33,37 @@ import type {
   CancelAdd,
   ClosedDayCalendar,
   VueComponent,
+  WebSettingResponse,
+  WebAcceptTime,
 } from '../types/easyapo.d.ts';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 
 dayjs.extend(customParseFormat);
+
+/** WebSetting APIのデータ部分（キャッシュ用） */
+type WebSettingData = NonNullable<WebSettingResponse['data']>;
+
+/** 電話番号から数字のみを抽出する */
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
+/** 電話番号の下4桁を取得する */
+function phoneLast4(phone: string): string {
+  const digits = normalizePhone(phone);
+  return digits.slice(-4);
+}
+
+/** 電話番号の末尾一致で比較する（市外局番の有無やハイフンの表記揺れを吸収、最低6桁必要） */
+function phoneEndsWith(registered: string, input: string): boolean {
+  const regDigits = normalizePhone(registered);
+  const inputDigits = normalizePhone(input);
+  const shorter = regDigits.length < inputDigits.length ? regDigits : inputDigits;
+  const longer = regDigits.length < inputDigits.length ? inputDigits : regDigits;
+  if (shorter.length < 6) return false;
+  return longer.endsWith(shorter);
+}
 
 /**
  * 予約リクエスト（SDKの型を拡張してdeleteオペレーションを追加）
@@ -53,6 +79,10 @@ export type ReservationRequest = Omit<ReservationRequestBase, 'operation'> & {
         time?: string,
     },
   }
+  /** リソースID候補（複数指定時、この中から空きスタッフを自動選択） */
+  resource_ids?: string[];
+  /** 備考 */
+  notes?: string;
 };
 
 /**
@@ -65,6 +95,8 @@ export interface ReservationResultDetail {
   duration_min?: number;
   error_code?: string;
   error_message?: string;
+  /** pic（担当者）情報 - 担当者が空いていない場合に設定 */
+  pic?: { id: number; name: string }[];
 }
 
 /**
@@ -118,10 +150,16 @@ export class AppointPage extends BasePage {
   private static treatmentItemsCacheTime = 0;
   private static readonly TREATMENT_ITEMS_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
 
+  private static webSettingCache: WebSettingData | null = null;
+  private static webSettingCacheTime = 0;
+  private static readonly WEB_SETTING_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
+
   /** キャッシュをクリア（再ログイン時に呼び出す） */
   static clearCache(): void {
     AppointPage.treatmentItemsCache = null;
     AppointPage.treatmentItemsCacheTime = 0;
+    AppointPage.webSettingCache = null;
+    AppointPage.webSettingCacheTime = 0;
   }
 
   /**
@@ -433,14 +471,58 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * 指定したpic（担当者）が指定時間帯に空いているかチェック
+   * columnとは独立に、全カラムの予約を横断してpicの重複を確認する
+   */
+  private isPicAvailable(
+    picIds: number[],
+    timeRows: TimeRow[],
+    startIndex: number,
+    requiredSlots: number,
+    reserveRows: ReserveRow[],
+    excludeReservationId?: number
+  ): boolean {
+    // 連続枠が確保できるかチェック
+    if (!this.areSlotsConsecutive(timeRows, startIndex, requiredSlots)) {
+      return false;
+    }
+
+    const picIdSet = new Set(picIds);
+
+    // 各枠でpicが他の予約に割り当てられていないかチェック
+    for (let j = 0; j < requiredSlots; j++) {
+      const checkTimeRow = timeRows[startIndex + j];
+      const hasConflict = reserveRows.some((reservation) => {
+        if (reservation.cancel === 1) return false;
+        if (excludeReservationId != null && reservation.id === excludeReservationId) return false;
+        // この予約のpicにチェック対象のpicが含まれているか
+        if (!reservation.pic?.some(p => picIdSet.has(p.id))) return false;
+
+        const slotTime = checkTimeRow.time_num;
+        return slotTime >= reservation.time_from_num && slotTime < reservation.time_to_num;
+      });
+
+      if (hasConflict) return false;
+    }
+
+    return true;
+  }
+
+  /**
    * 1日分の空き枠を取得
    */
   private getAvailableSlotsForDate(
     dateStr: string,
     dayData: NonNullable<Awaited<ReturnType<typeof this.getReserveDayData>>>,
-    resources: string[] | undefined,
-    duration: number | undefined
+    options: {
+      resources?: string[];
+      duration?: number;
+      acceptTime?: WebAcceptTime;
+      reservationDeadlineHours?: number | null;
+      picIds?: number[];
+    }
   ): SlotInfo[] {
+    const { resources, duration, acceptTime, reservationDeadlineHours, picIds } = options;
     const slots: SlotInfo[] = [];
 
     // 急患枠を除外した担当者リスト
@@ -458,6 +540,10 @@ export class AppointPage extends BasePage {
     // 診療時間を数値形式に変換（HHMM形式）
     const startTimeNum = String(dayData.start_hour).padStart(2, '0') + String(dayData.start_minute).padStart(2, '0');
     const endTimeNum = String(dayData.end_hour).padStart(2, '0') + String(dayData.end_minute).padStart(2, '0');
+
+    // Web予約受付時間による制限（HHMM形式に変換）
+    const acceptFromNum = acceptTime ? acceptTime.web_accept_time_from.replace(':', '') : null;
+    const acceptToNum = acceptTime ? acceptTime.web_accept_time_to.replace(':', '') : null;
 
     // 必要な連続枠数を計算（15分刻み）
     const requiredSlots = duration ? Math.ceil(duration / 15) : 1;
@@ -482,11 +568,27 @@ export class AppointPage extends BasePage {
       // 現在時刻より過去の枠はスキップ
       if (`${dateStr} ${timeRow.time_num}` < nowDateTimeNum) continue;
 
+      // reservation_deadline: 予約時刻のn時間前を過ぎていたらスキップ
+      if (reservationDeadlineHours != null) {
+        const slotDateTime = dayjs(`${dateStr} ${timeRow.hour}:${timeRow.minute}`, 'YYYY-MM-DD H:m').tz('Asia/Tokyo', true);
+        if (nowJst.isAfter(slotDateTime.subtract(reservationDeadlineHours, 'hour'))) continue;
+      }
+
+      // Web予約受付時間の範囲外はスキップ（00:00～00:00は制限なし）
+      if (acceptFromNum && acceptToNum && !(acceptFromNum === '0000' && acceptToNum === '0000')) {
+        if (timeRow.time_num < acceptFromNum || timeRow.time_num >= acceptToNum) continue;
+      }
+
       // 休憩時間はスキップ
       if (this.isBreakTime(timeRow)) continue;
 
       // 予約受付不可の時間帯はスキップ
       if (dayData.closed_td_list.includes(timeRow.time_num)) continue;
+
+      // picが指定されている場合、この時間枠でpicが空いているかチェック
+      if (picIds?.length && !this.isPicAvailable(picIds, timeRows, i, requiredSlots, dayData.reserve_rows)) {
+        continue;
+      }
 
       // この時間枠で空いている担当者を探す
       const availableStaff = availableColumns
@@ -511,9 +613,22 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * リソースIDの配列からリソース名の配列に変換する
+   * column_rows（担当者カラム）のidとnameを照合して解決する
+   */
+  async resolveResourceIds(resourceIds: string[]): Promise<string[]> {
+    const dayData = await this.getReserveDayData();
+    if (!dayData) return [];
+    const idSet = new Set(resourceIds.map(id => Number(id)));
+    return dayData.column_rows
+      .filter(col => idSet.has(col.id))
+      .map(col => col.name);
+  }
+
+  /**
    * 指定日付の空き枠を取得
    */
-  async getAvailableSlots({ dateFrom, dateTo, resources, duration, menu }: {
+  async getAvailableSlots({ dateFrom, dateTo, resources, duration, menu, picIds }: {
     /** 開始日 (YYYY-MM-DD) */
     dateFrom: string;
     /** 終了日 (YYYY-MM-DD) */
@@ -524,9 +639,16 @@ export class AppointPage extends BasePage {
     duration?: number;
     /** メニュー情報（指定時はメニューのresources/treatment_timeで絞り込み・調整） */
     menu?: MenuInfo;
+    /** pic（担当者）IDの配列。指定時はこれらのpicが全員空いている枠のみを返す */
+    picIds?: number[];
   }): Promise<SlotInfo[]> {
     const perfStart = Date.now();
     this.step(`getAvailableSlots: start (${dateFrom} - ${dateTo})`);
+    // Web予約設定を取得
+    const webSetting = await this.getWebSetting();
+    console.log(`[PERF] getWebSetting: ${Date.now() - perfStart}ms`);
+    const webAcceptTimes = webSetting?.web_accept_time ?? null;
+
     // メニューから診療メニュー情報を取得
     const matchedItem = await this.findTreatmentItem(menu);
     console.log(`[PERF] findTreatmentItem: ${Date.now() - perfStart}ms`);
@@ -555,8 +677,20 @@ export class AppointPage extends BasePage {
     effectiveDuration ??= 45
 
     const slots: SlotInfo[] = [];
+    const nowJst = dayjs().tz('Asia/Tokyo');
     const startDate = dayjs(dateFrom);
     const endDate = dayjs(dateTo);
+
+    // display_from_dayによる開始日制限（n日後から予約可能）
+    const displayFromDay = webSetting?.display_from_day;
+    const earliestDate = displayFromDay != null
+      ? nowJst.startOf('day').add(displayFromDay, 'day')
+      : null;
+
+    // reservation_deadlineによる時間制限（n時間前まで受付可能）
+    const reservationDeadlineHours = webSetting?.reservation_deadline != null
+      ? parseInt(webSetting.reservation_deadline, 10)
+      : null;
 
     // 休診日データをキャッシュ（最初の日付取得時に保存）
     let cachedClosedDays: ClosedDayCalendar[] | null = null;
@@ -565,6 +699,13 @@ export class AppointPage extends BasePage {
     while (currentDate.isBefore(endDate) || currentDate.isSame(endDate, 'day')) {
       const dateStr = currentDate.format('YYYY-MM-DD');
       const loopStart = Date.now();
+
+      // display_from_dayによる日付制限チェック
+      if (earliestDate && currentDate.isBefore(earliestDate, 'day')) {
+        console.log(`[PERF] date=${dateStr}: SKIPPED (within display_from_day=${displayFromDay})`);
+        currentDate = currentDate.add(1, 'day');
+        continue;
+      }
 
       // キャッシュされた休診日データがあれば、事前に休診日をスキップ（APIコール不要）
       if (cachedClosedDays && this.isClosedDay(dateStr, cachedClosedDays)) {
@@ -596,7 +737,11 @@ export class AppointPage extends BasePage {
           continue;
         }
 
-        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, effectiveResources, effectiveDuration);
+        // 曜日に対応するWeb予約受付時間を取得（0=日, 1=月, ..., 6=土）
+        const dayOfWeek = currentDate.day();
+        const acceptTime = webAcceptTimes?.[dayOfWeek];
+
+        const daySlots = this.getAvailableSlotsForDate(dateStr, dayData, { resources: effectiveResources, duration: effectiveDuration, acceptTime, reservationDeadlineHours, picIds });
         console.log(`[PERF] date=${dateStr}: ${daySlots.length} slots found`);
         slots.push(...daySlots);
       }
@@ -671,6 +816,54 @@ export class AppointPage extends BasePage {
   }
 
   /**
+   * 患者検索結果から電話番号が一致する患者を探す
+   * tel1の末尾一致で見つからない場合、患者詳細を取得してtel2も確認する
+   */
+  private async findPatientByPhone(
+    candidates: PatientSearchItem[],
+    customerPhone: string
+  ): Promise<PatientSearchItem | undefined> {
+    // tel1の末尾一致で探す
+    const tel1Match = candidates.find(
+      (p) => p.tel1 && phoneEndsWith(p.tel1, customerPhone)
+    );
+    if (tel1Match) return tel1Match;
+
+    // tel1で見つからない場合、各候補の詳細を取得してtel2を確認
+    for (const candidate of candidates) {
+      const detail = await this.getPatientDetail(candidate.id);
+      if (detail?.data?.tel2 && phoneEndsWith(detail.data.tel2, customerPhone)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Web予約設定を取得（キャッシュ付き）
+   * web_accept_time は日〜土（index 0=日, 1=月, ..., 6=土）の7要素
+   */
+  private async getWebSetting(): Promise<WebSettingData | null> {
+    const now = Date.now();
+    if (AppointPage.webSettingCache && (now - AppointPage.webSettingCacheTime) < AppointPage.WEB_SETTING_CACHE_TTL_MS) {
+      return AppointPage.webSettingCache;
+    }
+
+    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
+    const result = await reserveDayHandle?.evaluate(async (reserveDay) => {
+      if (!reserveDay) return null;
+      const response = await reserveDay.get<WebSettingResponse>('/websetting', {});
+      return response?.data?.data ?? null;
+    }) ?? null;
+
+    if (result) {
+      AppointPage.webSettingCache = result;
+      AppointPage.webSettingCacheTime = now;
+    }
+    return result;
+  }
+
+  /**
    * 予約詳細を取得
    */
   private async getReservationDetail(reservationId: number): Promise<ReservationDetailResponse | null> {
@@ -709,7 +902,8 @@ export class AppointPage extends BasePage {
       (response) => response.url().includes('/patients?') && response.request().method() === 'GET'
     );
 
-    // SideMainで患者検索を実行
+    // SideMainで患者検索を実行（下4桁で検索）
+    const telLast4 = phoneLast4(customerPhone);
     {
       await using sideMain = await this.getVueComponent('SideMain');
       await sideMain?.evaluate((comp, phone) => {
@@ -717,7 +911,7 @@ export class AppointPage extends BasePage {
           comp.s_q = phone;
           comp.clickSearch();
         }
-      }, customerPhone);
+      }, telLast4);
     }
 
     // 患者検索APIのレスポンスを取得
@@ -732,10 +926,18 @@ export class AppointPage extends BasePage {
       return await this.searchReservationsByMemo(dateFrom, dateTo, customerPhone);
     }
 
-    // 電話番号が一致する患者をすべて検索（tel1またはtel2、家族など複数人の可能性あり）
-    const matchedPatients = patientsData.data.patients.filter(
-      (patient: PatientSearchItem) => patient.tel1 === customerPhone || patient.tel2 === customerPhone
-    );
+    // 電話番号の末尾一致で絞り込み（tel1 → tel2の順で確認、家族など複数人の可能性あり）
+    const matchedPatients: PatientSearchItem[] = [];
+    for (const patient of patientsData.data.patients) {
+      if (patient.tel1 && phoneEndsWith(patient.tel1, customerPhone)) {
+        matchedPatients.push(patient);
+      } else {
+        const detail = await this.getPatientDetail(patient.id);
+        if (detail?.data?.tel2 && phoneEndsWith(detail.data.tel2, customerPhone)) {
+          matchedPatients.push(patient);
+        }
+      }
+    }
 
     // 電話番号が一致する患者がいない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
     if (matchedPatients.length === 0) {
@@ -954,6 +1156,8 @@ export class AppointPage extends BasePage {
     console.log(`[DEBUG] createReservation: patientSearch check: patientId=${patientId}, customerName=${customerName}, customerPhone=${customerPhone}`);
     if (!patientId && customerPhone) {
       console.log(`[DEBUG] createReservation: searching patient by phone=${customerPhone}`);
+      // 電話番号の下4桁で検索し、結果を電話番号の末尾一致で絞り込む
+      const telLast4 = phoneLast4(customerPhone);
       await using reserveDay = await this.getVueComponent('ReserveDay');
       const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
         if (!reserveDay) return null;
@@ -962,18 +1166,26 @@ export class AppointPage extends BasePage {
           or_search: 0,
           patient_name: '',
           patient_name_kana: params.customerName || '',
-          tel: params.customerPhone,
+          tel: params.telLast4,
           sort_order: 'patient_number',
         });
 
         return response?.data ?? null;
-      }, { customerPhone, customerName });
+      }, { telLast4, customerName });
 
       console.log(`[DEBUG] createReservation: searchResult keys=${JSON.stringify(searchResult ? Object.keys(searchResult) : null)}, full=${JSON.stringify(searchResult)?.substring(0, 500)}`);
       if (searchResult?.result && searchResult.data?.patients?.length) {
-        const matchedPatient = searchResult.data.patients[0];
-        patientId = matchedPatient?.patient_number;
-        console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}`);
+        // 電話番号の末尾一致で絞り込み（tel1 → tel2の順で確認）
+        const matchedPatient = await this.findPatientByPhone(searchResult.data.patients, customerPhone);
+        if (matchedPatient) {
+          patientId = matchedPatient.patient_number;
+          if (matchedPatient.name_kana) {
+            customerName = matchedPatient.name_kana;
+          }
+          console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}, name_kana=${matchedPatient.name_kana}`);
+        } else {
+          console.log(`[DEBUG] createReservation: no patient matched by phone (candidates=${searchResult.data.patients.length})`);
+        }
       } else {
         console.log(`[DEBUG] createReservation: no patient found`);
       }
@@ -1185,7 +1397,8 @@ export class AppointPage extends BasePage {
   private async findAvailableStaff(
     timeFrom: string,
     durationMin: number,
-    menu?: MenuInfo
+    menu?: MenuInfo,
+    resourceIds?: string[]
   ): Promise<number | null> {
     // 予約日のデータを取得
     const dayData = await this.getReserveDayData();
@@ -1195,6 +1408,14 @@ export class AppointPage extends BasePage {
     let availableColumns = dayData.column_rows.filter(
       (col) => col.name !== '急患'
     );
+
+    // リソースIDが指定されている場合、その候補に絞り込む
+    if (resourceIds?.length) {
+      const idSet = new Set(resourceIds.map(id => Number(id)));
+      availableColumns = availableColumns.filter(
+        (col) => idSet.has(col.id)
+      );
+    }
 
     // メニューが指定されている場合、対応可能な担当者で絞り込む
     const matchedItem = await this.findTreatmentItem(menu);
@@ -1247,6 +1468,108 @@ export class AppointPage extends BasePage {
     for (const reservation of reservations) {
       this.step(`processReservations: processing ${reservation.operation} (${reservation.reservation_id})`);
       if (reservation.operation === 'create') {
+        // Web予約設定による予約可能期間チェック
+        const webSetting = await this.getWebSetting();
+        if (webSetting) {
+          const nowJst = dayjs().tz('Asia/Tokyo');
+          const slotDateTime = dayjs(`${reservation.slot.date} ${reservation.slot.start_at}`, 'YYYY-MM-DD HH:mm').tz('Asia/Tokyo', true);
+
+          // display_from_day: n日後からのみ予約可能
+          if (webSetting.display_from_day != null) {
+            const earliestDate = nowJst.startOf('day').add(webSetting.display_from_day, 'day');
+            if (slotDateTime.isBefore(earliestDate)) {
+              results.push({
+                reservation_id: reservation.reservation_id,
+                operation: 'create',
+                result: {
+                  status: 'failed',
+                  error_code: 'INVALID_REQUEST',
+                  error_message: `予約可能期間外です（${webSetting.display_from_day}日後以降のみ予約可能）`,
+                },
+              });
+              continue;
+            }
+          }
+
+          // reservation_deadline: 予約時刻のn時間前まで受付可能
+          if (webSetting.reservation_deadline != null) {
+            const deadlineHours = parseInt(webSetting.reservation_deadline, 10);
+            if (!isNaN(deadlineHours) && nowJst.isAfter(slotDateTime.subtract(deadlineHours, 'hour'))) {
+              results.push({
+                reservation_id: reservation.reservation_id,
+                operation: 'create',
+                result: {
+                  status: 'failed',
+                  error_code: 'INVALID_REQUEST',
+                  error_message: `予約締切を過ぎています（予約時刻の${deadlineHours}時間前まで受付可能）`,
+                },
+              });
+              continue;
+            }
+          }
+        }
+
+        // notesの[patient]タグによる患者特定（patient_number + birthdayで検索）
+        if (reservation.notes) {
+          const patientTagMatch = reservation.notes.match(/\[patient\](.*?)\[\/patient\]/);
+          if (patientTagMatch) {
+            const tagContent = patientTagMatch[1];
+            const birthdayMatch = tagContent.match(/birthday:\s*(\S+)/);
+            const idMatch = tagContent.match(/id:\s*(\S+)/);
+            const tagBirthday = birthdayMatch?.[1]?.replace(/,\s*$/, '');
+            const tagPatientNumber = idMatch?.[1]?.replace(/,\s*$/, '');
+
+            if (tagPatientNumber) {
+              // 患者番号で直接検索（/patients/number/{patient_number}）
+              await using reserveDay = await this.getVueComponent('ReserveDay');
+              const patientResult = await reserveDay?.evaluate(async (rd, patientNumber) => {
+                if (!rd) return null;
+                const response = await rd.get<PatientDetailResponse>(
+                  `/patients/number/${patientNumber}`,
+                  {}
+                );
+                return response?.data ?? null;
+              }, tagPatientNumber) ?? null;
+
+              if (patientResult?.result && patientResult.data) {
+                // 生年月日の一致チェック
+                if (tagBirthday && patientResult.data.birthday !== tagBirthday) {
+                  console.log(`[DEBUG] [patient]タグ: 生年月日不一致 (期待:${tagBirthday}, 実際:${patientResult.data.birthday})`);
+                  results.push({
+                    reservation_id: reservation.reservation_id,
+                    operation: 'create',
+                    result: {
+                      status: 'failed',
+                      error_code: 'INVALID_REQUEST',
+                      error_message: `患者情報が一致しません（患者番号: ${tagPatientNumber}, 生年月日不一致）`,
+                    },
+                  });
+                  continue;
+                }
+                // 患者番号で特定できた → customer_idを上書き、名前をフリガナに置き換え
+                console.log(`[DEBUG] [patient]タグで患者特定: patient_number=${tagPatientNumber}, id=${patientResult.data.id}, name_kana=${patientResult.data.name_kana}`);
+                reservation.customer.customer_id = tagPatientNumber;
+                if (patientResult.data.name_kana) {
+                  reservation.customer.name = patientResult.data.name_kana;
+                }
+              } else {
+                // 患者番号が見つからない → エラー
+                console.log(`[DEBUG] [patient]タグで患者特定失敗: patient_number=${tagPatientNumber}`);
+                results.push({
+                  reservation_id: reservation.reservation_id,
+                  operation: 'create',
+                  result: {
+                    status: 'failed',
+                    error_code: 'INVALID_REQUEST',
+                    error_message: `患者が見つかりません（患者番号: ${tagPatientNumber}）`,
+                  },
+                });
+                continue;
+              }
+            }
+          }
+        }
+
         // 予約日を読み込む（担当者検索のため）
         await this.selectDate(reservation.slot.date);
 
@@ -1269,7 +1592,8 @@ export class AppointPage extends BasePage {
           const availableStaffId = await this.findAvailableStaff(
             reservation.slot.start_at,
             effectiveDuration,
-            reservation.menu
+            reservation.menu,
+            reservation.resource_ids
           );
 
           if (!availableStaffId) {
@@ -1336,6 +1660,7 @@ export class AppointPage extends BasePage {
             result: {
               status: 'failed',
               error_message: result.error,
+              pic: result.pic,
             },
           });
         } else {
@@ -1436,7 +1761,7 @@ export class AppointPage extends BasePage {
     date: string,
     time: string,
     customerPhone: string
-  ): Promise<{ reservationId: string; columnNo: number } | null> {
+  ): Promise<{ reservationId: string; columnNo: number; pic: { id: number; name: string }[] | null } | null> {
     // /reservations APIで指定日の予約を取得
     await using reserveDayHandle = await this.getVueComponent('ReserveDay');
     const result = await reserveDayHandle?.evaluate(async (reserveDay, date) => {
@@ -1481,7 +1806,8 @@ export class AppointPage extends BasePage {
       });
 
       if (timeCandidates.length > 0) {
-        // 電話番号で患者を検索し、patient_numberでマッチング
+        // 電話番号の下4桁で患者を検索し、末尾一致で絞り込んでpatient_numberでマッチング
+        const telLast4 = phoneLast4(customerPhone);
         await using reserveDayHandle2 = await this.getVueComponent('ReserveDay');
         const searchResult = await reserveDayHandle2?.evaluate(async (reserveDay, params) => {
           if (!reserveDay) return null;
@@ -1489,18 +1815,27 @@ export class AppointPage extends BasePage {
             or_search: 0,
             patient_name: '',
             patient_name_kana: '',
-            tel: params.customerPhone,
+            tel: params.telLast4,
             sort_order: 'patient_number',
           });
           return response?.data ?? null;
-        }, { customerPhone }) ?? null;
+        }, { telLast4 }) ?? null;
 
         if (searchResult?.result && searchResult.data?.patients?.length) {
-          // APIがtel検索で返した患者のpatient_numberを収集
-          // （tel1/tel2がnullでもAPI側で電話番号照合済み）
+          // 電話番号の末尾一致で絞り込んだ患者のpatient_numberを収集（tel1 → tel2の順で確認）
+          const phoneMatchedPatients: PatientSearchItem[] = [];
+          for (const p of searchResult.data.patients) {
+            if (p.tel1 && phoneEndsWith(p.tel1, customerPhone)) {
+              phoneMatchedPatients.push(p);
+            } else {
+              const detail = await this.getPatientDetail(p.id);
+              if (detail?.data?.tel2 && phoneEndsWith(detail.data.tel2, customerPhone)) {
+                phoneMatchedPatients.push(p);
+              }
+            }
+          }
           const matchedPatientNumbers = new Set(
-            searchResult.data.patients
-              .map((p) => p.patient_number)
+            phoneMatchedPatients.map((p) => p.patient_number)
           );
 
           // 時刻候補からpatient_numberが一致する予約を探す
@@ -1525,6 +1860,7 @@ export class AppointPage extends BasePage {
     return {
       reservationId: String(matched.id),
       columnNo: matched.column_no,
+      pic: matched.pic ?? null,
     };
   }
 
@@ -1571,7 +1907,7 @@ export class AppointPage extends BasePage {
     customerPhone: string;
     /** 新しいメニュー情報（メモに設定） */
     menu?: MenuInfo;
-  }): Promise<{ reservationId: string } | { error: string }> {
+  }): Promise<{ reservationId: string } | { error: string; pic?: { id: number; name: string }[] }> {
     this.step(`updateReservation: start (${date} ${time}, ${customerPhone})`);
 
     // 1. 予約日を読み込む
@@ -1615,6 +1951,50 @@ export class AppointPage extends BasePage {
     const matchedItem = await this.findTreatmentItem(menu);
     const menuColor = matchedItem?.color;
     const menuTreatmentTime = matchedItem?.treatment_time;
+
+    // 2.5. 日時変更がありpicが設定されている場合、変更先でpicが空いているかチェック
+    if ((desired?.date || desired?.time) && found.pic?.length) {
+      const targetDate = desired.date || date;
+      const targetTime = desired.time || time;
+      const picIds = found.pic.map(p => p.id);
+      const durationMin = menuTreatmentTime ?? 45;
+
+      // 変更先の日付データを取得
+      await this.selectDate(targetDate);
+      const targetDayData = await this.getReserveDayData();
+
+      if (targetDayData) {
+        const startTimeNum = String(targetDayData.start_hour).padStart(2, '0') + String(targetDayData.start_minute).padStart(2, '0');
+        const endTimeNum = String(targetDayData.end_hour).padStart(2, '0') + String(targetDayData.end_minute).padStart(2, '0');
+        const timeRows = targetDayData.time_rows.filter(
+          (tr) => tr.time_num >= startTimeNum && tr.time_num < endTimeNum
+        );
+        const targetTimeNum = targetTime.replace(':', '');
+        const startIndex = timeRows.findIndex((tr) => tr.time_num === targetTimeNum);
+        const requiredSlots = Math.ceil(durationMin / 15);
+
+        if (startIndex !== -1) {
+          const picAvailable = this.isPicAvailable(
+            picIds, timeRows, startIndex, requiredSlots,
+            targetDayData.reserve_rows, Number(found.reservationId)
+          );
+
+          if (!picAvailable) {
+            const picNames = found.pic.map(p => p.name).join('、');
+            this.step(`updateReservation: pic unavailable (${picNames}) at ${targetDate} ${targetTime}`);
+            // 元の日付に戻す
+            await this.selectDate(date);
+            return {
+              error: `担当者（${picNames}）が指定の時間帯（${targetDate} ${targetTime}）に空いていません`,
+              pic: found.pic,
+            };
+          }
+        }
+      }
+
+      // 元の日付に戻してから予約編集ダイアログを開く
+      await this.selectDate(date);
+    }
 
     // 3. 予約編集ダイアログを開く
     await this.openReserveEditDialog(found.reservationId);

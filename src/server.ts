@@ -50,6 +50,24 @@ const BASE_URL = 'https://cieasyapo2.ci-medical.com';
 let sessionManager: BrowserSessionManager | null = null;
 let currentCredentials: Credentials | null = null;
 
+// pic（担当者）コンテキスト: 予約変更でpicが空いていない場合に保持し、空き枠検索で絞り込みに使用
+let picContext: {
+  pics: { id: number; name: string }[];
+  expiresAt: number;
+} | null = null;
+
+const PIC_CONTEXT_TTL_MS = 60 * 1000; // 1分
+
+function getActivePicContext() {
+  if (picContext && Date.now() < picContext.expiresAt) {
+    // 参照時にTTLを延長
+    picContext.expiresAt = Date.now() + PIC_CONTEXT_TTL_MS;
+    return picContext;
+  }
+  picContext = null;
+  return null;
+}
+
 // セッション初期化用Mutex（複数リクエストの競合防止）
 const sessionInitMutex = new Mutex();
 
@@ -250,6 +268,8 @@ type SlotsQuery = Record<string, string | undefined> & {
   external_menu_id?: string;
   /** メニュー名 - オプション */
   menu_name?: string;
+  /** リソースID（カンマ区切り） - オプション */
+  resource_ids?: string;
 }
 
 app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQuery>, res: Response) => {
@@ -273,6 +293,8 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
     external_menu_id: req.query.external_menu_id,
     menu_name: req.query.menu_name || '',
   } : undefined;
+  const resourceIdsParam = req.query.resource_ids;
+  const resourceIds = resourceIdsParam ? resourceIdsParam.split(',').map(r => r.trim()).filter(Boolean) : undefined;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
   try {
@@ -295,8 +317,27 @@ app.get('/slots', async (req: Request<ParamsDictionary, unknown, unknown, SlotsQ
       const appointPage = new AppointPage(page, screenshot);
       await appointPage.navigate(BASE_URL);
 
+      // resourceIdsが指定されている場合、リソース名に変換してresourcesにマージ
+      let effectiveResources = resources;
+      if (resourceIds?.length) {
+        const resolvedNames = await appointPage.resolveResourceIds(resourceIds);
+        if (effectiveResources?.length) {
+          const resolvedSet = new Set(resolvedNames);
+          effectiveResources = effectiveResources.filter(r => resolvedSet.has(r));
+        } else {
+          effectiveResources = resolvedNames;
+        }
+      }
+
+      // picコンテキストが有効な場合、picIDでフィルタリング
+      const activePicContext = getActivePicContext();
+      const picIds = activePicContext?.pics.map(p => p.id);
+      if (picIds?.length) {
+        console.log(`[Server] GET /slots: applying picContext filter (${activePicContext!.pics.map(p => p.name).join(', ')})`);
+      }
+
       // 空き枠を取得
-      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources, duration, menu });
+      const slots = await appointPage.getAvailableSlots({ dateFrom, dateTo, resources: effectiveResources, duration, menu, picIds });
 
       // テストモードの場合はスクリーンショットを取得
       let screenshotBase64: string | undefined;
@@ -460,6 +501,9 @@ app.get('/reservations/search', async (req: Request<ParamsDictionary, unknown, u
   const dateTo = req.query.date_to || dateFrom;
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
 
+  // 予約検索が実行されたらpicコンテキストをリセット
+  picContext = null;
+
   try {
     // セッションを確保
     await ensureSessionManager(authInfo.credentials);
@@ -557,6 +601,10 @@ type ReservationCreateBody = {
   menu_name?: string;
   /** 外部メニューID - オプション */
   external_menu_id?: string;
+  /** リソースID - オプション */
+  resource_ids?: string[] | string;
+  /** 備考 - オプション */
+  notes?: string;
 }
 
 app.post('/reservations', async (req: Request<ParamsDictionary, unknown, ReservationCreateBody>, res: Response) => {
@@ -570,7 +618,10 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
     return;
   }
 
-  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name, external_menu_id } = req.body;
+  const { date, time, duration_min, customer_id, customer_name, customer_phone, menu_name, external_menu_id, resource_ids: rawResourceIds, notes } = req.body;
+  const resource_ids = rawResourceIds == null ? undefined
+    : Array.isArray(rawResourceIds) ? rawResourceIds
+    : rawResourceIds.split(',').map((s) => s.trim()).filter(Boolean);
   console.log(`[DEBUG] POST /reservations: req.body=${JSON.stringify(req.body)}`);
   console.log(`[DEBUG] POST /reservations: external_menu_id=${external_menu_id}, menu_name=${menu_name}`);
   const isTestMode = req.headers['x-rpa-test-mode'] === 'true';
@@ -619,7 +670,11 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
         },
         customer: { customer_id: String(customer_id  || ''), name: customer_name, phone: customer_phone },
         menu: { menu_id: '', external_menu_id: external_menu_id || '', menu_name: menu_name || '' },
-        staff: { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
+        staff: resource_ids?.length === 1
+          ? { staff_id: resource_ids[0], external_staff_id: '', resource_name: '', preference: 'specific' as const }
+          : { staff_id: '', external_staff_id: '', resource_name: '', preference: 'any' as const },
+        resource_ids: resource_ids?.length && resource_ids.length > 1 ? resource_ids : undefined,
+        notes,
       }] satisfies ReservationRequest[];
 
       const results = await appointPage.processReservations(reservations);
@@ -649,6 +704,9 @@ app.post('/reservations', async (req: Request<ParamsDictionary, unknown, Reserva
       error_code: result.processResult.result.error_code,
       timing: { total_ms: Date.now() - startTime },
     };
+    if (response.error && !response.message) {
+      response.message = response.error;
+    }
 
     if (result.screenshotBase64) {
       response.screenshot = result.screenshotBase64;
@@ -772,12 +830,28 @@ app.put('/reservations', async (req: Request<ParamsDictionary, unknown, Reservat
       return { processResult, screenshotBase64 };
     }, REQUEST_TIMEOUT_MS);
 
+    const isSuccess = result.processResult.result.status === 'success';
+
+    // picコンテキストの更新
+    if (isSuccess) {
+      // 成功時はクリア
+      picContext = null;
+    } else if (result.processResult.result.pic?.length) {
+      // 担当者が空いていない場合はpicコンテキストを保持
+      picContext = {
+        pics: result.processResult.result.pic,
+        expiresAt: Date.now() + PIC_CONTEXT_TTL_MS,
+      };
+      console.log(`[Server] picContext set: ${result.processResult.result.pic.map(p => p.name).join(', ')} (TTL: 1min)`);
+    }
+
     const response: Record<string, unknown> = {
-      success: result.processResult.result.status === 'success',
+      success: isSuccess,
       reservation_id: result.processResult.reservation_id,
       external_reservation_id: result.processResult.result.external_reservation_id,
-      error: result.processResult.result.status !== 'success' ? result.processResult.result.error_message : undefined,
+      error: isSuccess ? undefined : result.processResult.result.error_message,
       error_code: result.processResult.result.error_code,
+      pic: result.processResult.result.pic,
       timing: { total_ms: Date.now() - startTime },
     };
 
