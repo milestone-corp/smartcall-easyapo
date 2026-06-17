@@ -29,6 +29,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Playwright MCP working files (snapshots/console/採取JSON)
+.playwright-mcp/
+
 # Agent
 ## Serena
 .serena
@@ -37,3 +40,4 @@ npm-debug.log*
 .claude/debug
 .claude/plugins/cache
 .claude/plugins/CLAUDE.md
+.claude/settings.local.json
