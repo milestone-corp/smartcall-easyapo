@@ -158,7 +158,7 @@ fi
 
 # ===== 3. tarball 作成 =====
 echo -e "\n${YELLOW}[3/6] ソースコードをtarballに圧縮${NC}"
-tar -czf "$TEMP_DIR/$TARBALL_NAME" \
+tar --no-xattrs -czf "$TEMP_DIR/$TARBALL_NAME" \
     --exclude='node_modules' \
     --exclude='.git' \
     --exclude='dist' \
