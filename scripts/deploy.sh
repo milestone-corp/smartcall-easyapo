@@ -178,9 +178,11 @@ ssh -i "$SSH_KEY" "${DEPLOY_BASTION_USER}@${DEPLOY_BASTION_HOST}" \
 echo -e "${GREEN}tarball展開完了${NC}"
 
 # ===== 6. docker compose build & up =====
+# --remove-orphans: 旧 docker-compose.*.yml で起動した同名コンテナを自動クリーンアップ
+#                   （新フロー初回デプロイ時のコンテナ名衝突を防ぐ）
 echo -e "\n${YELLOW}[6/6] Dockerイメージビルド・コンテナ起動${NC}"
 ssh -i "$SSH_KEY" "${DEPLOY_BASTION_USER}@${DEPLOY_BASTION_HOST}" \
-    "ssh -i ~/.ssh/milestone ${DEPLOY_USER}@${DEPLOY_HOST} 'cd ${REMOTE_PATH} && sudo docker compose -f docker-compose.shop.yml build && sudo docker compose -f docker-compose.shop.yml up -d'"
+    "ssh -i ~/.ssh/milestone ${DEPLOY_USER}@${DEPLOY_HOST} 'cd ${REMOTE_PATH} && sudo docker compose -f docker-compose.shop.yml build && sudo docker compose -f docker-compose.shop.yml up -d --remove-orphans'"
 
 # コンテナ状態確認
 echo -e "\nコンテナ状態:"

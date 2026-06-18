@@ -1,8 +1,100 @@
 # EasyApo クリニック デプロイ手順書（ローカル / Staging / 本番）
 
 作成日: 2026-06-18
+更新日: 2026-06-19（統一デプロイフロー `scripts/deploy.sh` を追記）
 対象: `smartcall-easyapo` リポジトリ
 対象店舗: 本番 DB `shop_configs` の `integration_provider.code = 'easyapo'` の全店舗（5件）
+
+---
+
+## 0. 【推奨】統一デプロイフロー（`scripts/deploy.sh`）
+
+> `refactor/unify-deploy` で導入。店舗ごとの個別 compose / 個別 deploy スクリプトを
+> 1 つのテンプレート（[docker-compose.shop.yml](../docker-compose.shop.yml)）+
+> 1 つのスクリプト（[scripts/deploy.sh](../scripts/deploy.sh)）に統合したもの。
+> 以降の本番デプロイはこのフローを使う。旧フロー（第3〜5章）は参考用に残す。
+
+### 0-1. 仕組み
+
+```
+envs/<SHOP_ID>-<NAME>.env   ← 店舗ごとの接続情報（.gitignore、ローカルのみ）
+        │ deploy.sh が .env にコピー
+        ▼
+docker-compose.shop.yml     ← ${SHOP_NAME} ${SHOP_PORT} ${CONTAINER_NAME} を展開
+        │
+        ▼
+踏み台 → RPAサーバ → docker compose build & up -d --remove-orphans
+```
+
+### 0-2. envs/ の準備（初回のみ）
+
+`envs/<SHOP_ID>-<NAME>.env` は **機密情報（DEPLOY_HOST 等）を含むため .gitignore 対象**。
+リポジトリには [envs/_template.env](../envs/_template.env) のみコミットされている。
+
+```bash
+# テンプレートから店舗envを作成（既に存在するなら不要）
+cp envs/_template.env envs/57-konishi.env
+# → SHOP_ID/SHOP_NAME/SHOP_PORT/DEPLOY_HOST/DEPLOY_USER 等を埋める
+```
+
+現在用意済みの env（接続情報は各自のローカルに保持）:
+
+| env ファイル | 店舗 | DEPLOY_HOST | USER | PORT | CONTAINER_NAME |
+|---|---|---|---|---|---|
+| `envs/staging.env` | Staging | 192.168.20.72 | centos | 3011 | smartcall-easyapo-staging |
+| `envs/51-watai.env` | 渡井 | 192.168.20.70 | alma | 3011 | smartcall-easyapo-watai |
+| `envs/57-konishi.env` | 小西 | 192.168.20.70 | alma | 3012 | smartcall-easyapo-konishi |
+| `envs/121-ikeda.env` | 池田 | 192.168.20.70 | alma | 3013 | smartcall-easyapo-ikeda |
+| `envs/128-yuki-dental.env` | ゆきデンタル | 192.168.20.73 | centos | 3012 | yuki-dental |
+| `envs/165-beans-shika.env` | ビーンズ | 192.168.20.73 | centos | 3011 | beans-shika |
+
+### 0-3. デプロイコマンド
+
+```bash
+# 実行内容だけ確認（接続しない）
+./scripts/deploy.sh 57 --dry-run
+
+# Staging へデプロイ
+./scripts/deploy.sh staging
+
+# 各店舗 本番へデプロイ
+./scripts/deploy.sh 57     # 小西
+./scripts/deploy.sh 165    # ビーンズ
+./scripts/deploy.sh 128    # ゆきデンタル
+
+# main 同期チェックをスキップ
+SKIP_GIT_SYNC=1 ./scripts/deploy.sh 57
+```
+
+### 0-4. 検証（デプロイ後）
+
+```bash
+# ヘルスチェック（踏み台経由）— 例: staging
+ssh -i ~/.ssh/milestone centos@153.126.214.207 "curl -s http://192.168.20.72:3011/health"
+
+# 機能確認（その店舗のEasyApo認証で）— 例: 小西の認証
+ssh -i ~/.ssh/milestone centos@153.126.214.207 \
+  "curl -s http://192.168.20.72:3011/menu \
+   -H 'X-RPA-Login-Id: <ID>' -H 'X-RPA-Login-Password: <PW>'" | jq
+```
+
+### 0-5. 旧コンテナからの移行（重要）
+
+旧 `docker-compose.*.yml` で起動済みのコンテナがあるサーバへ初めて新フローでデプロイすると、
+**同名コンテナの衝突**が起きうる。`deploy.sh` は `docker compose up -d --remove-orphans` を
+使うため、新 compose project に属さない旧コンテナは自動でクリーンアップされる。
+
+> 2026-06-19 の staging 初回デプロイでは、旧 `docker-compose.staging.yml` で 8 日間
+> 稼働していたコンテナと名前衝突したため、一度 `docker compose -f docker-compose.staging.yml down`
+> で旧コンテナを停止してから新フローで起動した。`--remove-orphans` 追加後はこの手動作業は不要。
+
+### 0-6. 検証済み（2026-06-19）
+
+`./scripts/deploy.sh staging` で RPA03 にデプロイ → Vue3 対応コード（playwright 1.61.0）が
+リモートコンテナで動作することを確認:
+- `/health` → degraded（未ログイン、正常）
+- `/menu` → ✅（LoginPage DOM版 + treatment_items fetch）
+- `/slots` → ✅（getReserveDayData 4本API並列fetch、ローカル検証と同結果）
 
 ---
 
