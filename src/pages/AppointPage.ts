@@ -10,32 +10,23 @@ import {
   type ScreenshotManager,
   type MenuInfo,
 } from '@smartcall/rpa-sdk';
-import type { Page, JSHandle } from 'playwright';
+import type { Page } from 'playwright';
 import type {
-  SideMain,
-  ReserveDay,
-  ReserveAdd,
-  ReserveEdit,
-  PatientList,
   ColumnRow,
   TimeRow,
   ReserveRow,
   TreatmentItem,
-  TreatmentItemsResponse,
   PatientsSearchResponse,
   PatientsOrSearchResponse,
   PatientSearchItem,
   PatientDetailResponse,
   ReservationDetailResponse,
-  ReservationApiResponse,
   ReservationsListResponse,
-  ReservationsGetResponse,
-  CancelAdd,
   ClosedDayCalendar,
-  VueComponent,
   WebSettingResponse,
   WebAcceptTime,
 } from '../types/easyapo.d.ts';
+import { EasyApoApiClient } from '../lib/EasyApoApiClient.js';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 
@@ -144,6 +135,10 @@ export interface ReservationSearchResult {
 
 export class AppointPage extends BasePage {
   private readonly screenshot: ScreenshotManager;
+  private readonly apiClient: EasyApoApiClient;
+
+  /** 現在選択中の日付 (YYYY-MM-DD) - selectDate()で更新 */
+  private currentDate: string | null = null;
 
   /** メニュー一覧のオンメモリキャッシュ（店舗専用コンテナのためstaticで共有） */
   private static treatmentItemsCache: TreatmentItem[] | null = null;
@@ -154,12 +149,16 @@ export class AppointPage extends BasePage {
   private static webSettingCacheTime = 0;
   private static readonly WEB_SETTING_CACHE_TTL_MS = 5 * 60 * 1000; // 5分
 
+  /** カラム情報（column_rows）のキャッシュ - 接続ごとに1回取得すれば変わらない */
+  private static columnsCache: ColumnRow[] | null = null;
+
   /** キャッシュをクリア（再ログイン時に呼び出す） */
   static clearCache(): void {
     AppointPage.treatmentItemsCache = null;
     AppointPage.treatmentItemsCacheTime = 0;
     AppointPage.webSettingCache = null;
     AppointPage.webSettingCacheTime = 0;
+    AppointPage.columnsCache = null;
   }
 
   /**
@@ -173,6 +172,7 @@ export class AppointPage extends BasePage {
   constructor(page: Page, screenshot: ScreenshotManager) {
     super(page);
     this.screenshot = screenshot;
+    this.apiClient = new EasyApoApiClient(page);
   }
 
   private static readonly TIMER_LABEL = '[AppointPage]';
@@ -200,33 +200,6 @@ export class AppointPage extends BasePage {
   }
 
   /**
-   * Vueコンポーネントの参照を取得（using宣言で自動dispose）
-   *
-   * @param componentName コンポーネント名（例: 'ReserveDay', 'SideMain'）
-   * @returns VueコンポーネントのJSHandle（AsyncDisposable）、見つからない場合はnull
-   *
-   * @example
-   * await using reserveDay = await this.getVueComponent('ReserveDay');
-   * await reserveDay?.evaluate((comp) => comp?.reserve_rows);
-   */
-  private async getVueComponent(componentName: 'SideMain'): Promise<JSHandle<SideMain> | null>;
-  private async getVueComponent(componentName: 'ReserveDay'): Promise<JSHandle<ReserveDay> | null>;
-  private async getVueComponent(componentName: 'ReserveEdit'): Promise<JSHandle<ReserveEdit> | null>;
-  private async getVueComponent(componentName: 'ReserveAdd'): Promise<JSHandle<ReserveAdd> | null>;
-  private async getVueComponent(componentName: 'CancelAdd'): Promise<JSHandle<CancelAdd> | null>;
-  private async getVueComponent(componentName: 'PatientList'): Promise<JSHandle<PatientList> | null>;
-  private async getVueComponent<T extends VueComponent>(componentName: string): Promise<JSHandle<T> | null>;
-  private async getVueComponent(componentName: string): Promise<JSHandle<VueComponent> | null> {
-    return await this.page.evaluateHandle(
-      (name) =>
-        Array.from(document.querySelectorAll<HTMLElement & { __vue__: VueComponent }>('*'))
-          .find(el => el?.__vue__?.$vnode?.tag?.endsWith(name))
-          ?.__vue__,
-      componentName
-    ) as JSHandle<VueComponent>;
-  }
-
-  /**
    * アポイント管理台帳ページに遷移
    */
   async navigate(baseUrl: string): Promise<void> {
@@ -240,7 +213,7 @@ export class AppointPage extends BasePage {
     this.step('navigate: start');
     await this.goto(`${baseUrl}/`);
     this.step('navigate: goto complete');
-    // メインコンポーネントが表示されるまで待機
+    // メインコンポーネントが表示されるまで待機（ログイン後の初期化完了確認）
     await this.page.waitForSelector('#col-main > div');
     await this.page.waitForSelector('#col-side > div');
     await this.waitForLoading();
@@ -248,96 +221,113 @@ export class AppointPage extends BasePage {
   }
 
   /**
-   * ページをリロードする
-   */
-  async reload(): Promise<void> {
-    const url = new URL(this.page.url());
-    await this.navigate(`${url.origin}/${url.pathname}`.replace(/\/$/,''));
-  }
-
-  /**
-   * 指定テキストを含む要素までスクロール
+   * 対象日付を設定する（旧: カレンダーUIで日付選択）
    *
-   * @param text 検索するテキスト
-   */
-  private async scrollToText(text: string): Promise<void> {
-    try {
-      await this.page.evaluate((searchText) => {
-        const walker = document.createTreeWalker(
-          document.body,
-          NodeFilter.SHOW_TEXT,
-          null
-        );
-        let node;
-        while ((node = walker.nextNode())) {
-          if (node.textContent?.includes(searchText)) {
-            const element = node.parentElement;
-            if (element) {
-              element.scrollIntoView({ block: 'center', behavior: 'instant' });
-            }
-            break;
-          }
-        }
-      }, text);
-    } catch {
-      // スクロールは重要ではないのでエラーは無視
-    }
-  }
-
-  /**
-   * 指定日付の予約データを読み込む（カレンダーで日付を選択）
+   * Vue 3 移行後はUI操作不要。日付を状態として保持するだけ。
+   * 以降の getReserveDayData() は currentDate を使って API を直接叩く。
    */
   private async selectDate(dateStr: string): Promise<void> {
-    const selectStart = Date.now();
-    this.step(`selectDate: start (${dateStr})`);
-    await this.waitForLoading();
-    const t1 = Date.now() - selectStart;
-
-    // 既に同じ日付が選択されている場合はスキップ
-    {
-      await using sideMain = await this.getVueComponent('SideMain');
-      const currentDate = await sideMain?.evaluate((comp) =>
-        comp?.selected_date?.toISOString().split('T')[0]
-      );
-      if (currentDate === dateStr) {
-        this.step(`selectDate: skipped (already selected: ${dateStr})`);
-        return;
-      }
+    if (this.currentDate === dateStr) {
+      this.step(`selectDate: skipped (already selected: ${dateStr})`);
+      return;
     }
-    const t2 = Date.now() - selectStart;
-
-    // 予約データ取得APIのレスポンスを監視
-    const reservationsResponsePromise = this.page.waitForResponse(
-      (response) => response.url().includes('/reservations?') && response.request().method() === 'GET'
-    );
-
-    // カレンダーコンポーネントのclickDayを呼び出す
-    {
-      await using sideMain = await this.getVueComponent('SideMain');
-      await sideMain?.evaluate((calendar, dateId) => {
-        if (!calendar) throw new Error('SideMainコンポーネントが見つかりません');
-        calendar.clickDay({ id: dateId })
-      }, dateStr);
-    }
-    const t3 = Date.now() - selectStart;
-
-    // APIレスポンスを待機
-    await reservationsResponsePromise;
-    const t4 = Date.now() - selectStart;
-    this.step(`selectDate: API response received (${dateStr})`);
-
-    await this.waitForLoading();
-    const t5 = Date.now() - selectStart;
-    this.page.evaluate(() => {
-      const calendarBody = document.querySelector('#calendar-body');
-      if (calendarBody) calendarBody.scrollTop = 0;
-    });
-    this.step(`selectDate: complete (${dateStr})`);
-    console.log(`[PERF] selectDate(${dateStr}): waitLoading1=${t1}ms, checkCurrent=${t2 - t1}ms, clickDay=${t3 - t2}ms, waitAPI=${t4 - t3}ms, waitLoading2=${t5 - t4}ms`);
+    this.currentDate = dateStr;
+    this.step(`selectDate: set (${dateStr})`);
   }
 
   /**
-   * 予約日コンポーネントからデータを取得
+   * clinic_hours APIのレスポンス1日分
+   */
+  private static readonly TIME_UNIT_MIN = 15;
+
+  /**
+   * 「HH:MM」を分に変換
+   */
+  private hhmmToMinutes(hhmm: string): number {
+    const [h, m] = hhmm.split(':').map((s) => parseInt(s, 10));
+    return h * 60 + m;
+  }
+
+  /**
+   * clinic_hours から 15分刻みの time_rows を生成
+   * （旧 ReserveDay コンポーネントがフロント側で行っていた処理）
+   */
+  private buildTimeRows(ch: {
+    clinic_hour_from: string;
+    clinic_hour_to: string;
+    break_time_from?: string;
+    break_time_to?: string;
+    night_break_time_from?: string;
+    night_break_time_to?: string;
+  }): TimeRow[] {
+    const unit = AppointPage.TIME_UNIT_MIN;
+    const fromMin = this.hhmmToMinutes(ch.clinic_hour_from);
+    const toMin = this.hhmmToMinutes(ch.clinic_hour_to);
+
+    const hasBreak = !!ch.break_time_from && !!ch.break_time_to
+      && ch.break_time_from !== ch.break_time_to;
+    const breakFrom = hasBreak ? this.hhmmToMinutes(ch.break_time_from!) : null;
+    const breakTo = hasBreak ? this.hhmmToMinutes(ch.break_time_to!) : null;
+
+    const hasNight = !!ch.night_break_time_from && !!ch.night_break_time_to
+      && ch.night_break_time_from !== ch.night_break_time_to;
+    const nightFrom = hasNight ? this.hhmmToMinutes(ch.night_break_time_from!) : null;
+    const nightTo = hasNight ? this.hhmmToMinutes(ch.night_break_time_to!) : null;
+
+    const rows: TimeRow[] = [];
+    for (let mins = fromMin; mins < toMin; mins += unit) {
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      const hh = String(h).padStart(2, '0');
+      const mm = String(m).padStart(2, '0');
+      const is_break_time = breakFrom != null && breakTo != null
+        && mins >= breakFrom && mins < breakTo;
+      const is_night_break_time = nightFrom != null && nightTo != null
+        && mins >= nightFrom && mins < nightTo;
+      rows.push({
+        hour: hh,
+        minute: mm,
+        time_num: `${hh}${mm}`,
+        time_text: `${hh}:${mm}`,
+        is_break_time,
+        is_night_break_time,
+      } as unknown as TimeRow);
+    }
+    return rows;
+  }
+
+  /**
+   * 予約一覧APIのレスポンスを ReserveRow 形式に正規化
+   * （time_from / time_to を HHMM 数値文字列に派生）
+   */
+  private normalizeReserveRows(reservations: Array<Record<string, unknown>>): ReserveRow[] {
+    return reservations.map((r) => ({
+      ...r,
+      time_from_num: typeof r.time_from === 'string' ? r.time_from.replace(':', '') : '',
+      time_to_num: typeof r.time_to === 'string' ? r.time_to.replace(':', '') : '',
+    })) as unknown as ReserveRow[];
+  }
+
+  /**
+   * カラム情報を取得（旧 ReserveDay.column_rows 相当）
+   * use_column flag が立っている列のみを返す（画面に表示される担当者列）
+   */
+  private async getColumnRows(): Promise<ColumnRow[]> {
+    if (AppointPage.columnsCache) return AppointPage.columnsCache;
+    const resp = await this.apiClient.get<{
+      column_names: ColumnRow[];
+      use_column: number[];
+    }>('/columns');
+    if (!resp.result || !resp.data) return [];
+    const useColumn = resp.data.use_column ?? [];
+    const rows = resp.data.column_names.filter((_, idx) => useColumn[idx] === 1);
+    AppointPage.columnsCache = rows;
+    return rows;
+  }
+
+  /**
+   * 指定日（currentDate）の予約データを取得
+   * 旧 ReserveDay コンポーネントが保持していたリアクティブデータを4本のAPIから合成する。
    */
   private async getReserveDayData(): Promise<{
     reserve_rows: ReserveRow[];
@@ -350,21 +340,57 @@ export class AppointPage extends BasePage {
     end_hour: number;
     end_minute: number;
   } | null> {
-    await using reserveDay = await this.getVueComponent('ReserveDay');
-    return await reserveDay?.evaluate((appoint) => {
-      if (!appoint) return null;
-      return {
-        reserve_rows: appoint.reserve_rows,
-        column_rows: appoint.column_rows,
-        time_rows: appoint.time_rows,
-        closed_days: appoint.closed_days,
-        closed_td_list: appoint.closed_td_list ?? [],
-        start_hour: appoint.start_hour,
-        start_minute: appoint.start_minute,
-        end_hour: appoint.end_hour,
-        end_minute: appoint.end_minute,
-      };
-    }) ?? null;
+    const date = this.currentDate;
+    if (!date) return null;
+
+    const [columnRows, hoursResp, closedResp, resvResp] = await Promise.all([
+      this.getColumnRows(),
+      this.apiClient.get<{
+        clinic_hours: Record<string, {
+          clinic_hour_from: string;
+          clinic_hour_to: string;
+          break_time_from?: string;
+          break_time_to?: string;
+          night_break_time_from?: string;
+          night_break_time_to?: string;
+        }>;
+      }>(`/clinic_hours/from/${date}`, { date, days: 1 }),
+      this.apiClient.get<{ closed_days: ClosedDayCalendar[] }>(
+        `/closed_days/from/${date}`,
+        { date, days: 1 },
+      ),
+      this.apiClient.get<{
+        reservations: Array<Record<string, unknown>>;
+        clinic_icons?: unknown;
+        use_dental_notation?: unknown;
+      }>('/reservations', { from: date, days: 1 }),
+    ]);
+
+    const clinicHour = hoursResp.data?.clinic_hours?.[date];
+    if (!clinicHour) return null;
+
+    const time_rows = this.buildTimeRows(clinicHour);
+    const [start_hour, start_minute] = clinicHour.clinic_hour_from.split(':').map((s) => parseInt(s, 10));
+    const [end_hour, end_minute] = clinicHour.clinic_hour_to.split(':').map((s) => parseInt(s, 10));
+
+    const closed_days = closedResp.data?.closed_days ?? [];
+    const reserve_rows = this.normalizeReserveRows(resvResp.data?.reservations ?? []);
+    // 休憩時間枠は予約受付不可
+    const closed_td_list = time_rows
+      .filter((tr) => tr.is_break_time || tr.is_night_break_time)
+      .map((tr) => tr.time_num);
+
+    return {
+      reserve_rows,
+      column_rows: columnRows,
+      time_rows,
+      closed_days,
+      closed_td_list,
+      start_hour,
+      start_minute,
+      end_hour,
+      end_minute,
+    };
   }
 
   /**
@@ -765,54 +791,39 @@ export class AppointPage extends BasePage {
       return AppointPage.treatmentItemsCache;
     }
 
-    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
-    const result = await reserveDayHandle?.evaluate(async (reserveDay) => {
-      if (!reserveDay) return null;
-
-      const apiUrl = reserveDay.$store.state.api.get_treatment_items;
-      const response = await reserveDay.get<TreatmentItemsResponse>(apiUrl, {});
-      const columnRows = reserveDay.column_rows;
-
-      // response.dataがAPIレスポンス本体（Axiosレスポンス形式）
-      return { apiResponse: response?.data, columnRows };
-    });
-
-    if (!result || !result.apiResponse || !result.apiResponse.result || !result.apiResponse.data) {
-      return [];
-    }
+    type TreatmentItemRaw = Omit<TreatmentItem, 'resources'>;
+    const [resp, columnRows] = await Promise.all([
+      this.apiClient.get<{ treatment_items: TreatmentItemRaw[] }>('/treatment_items'),
+      this.getColumnRows(),
+    ]);
+    if (!resp.result || !resp.data) return [];
 
     // use_columnのIDを担当者名に変換
-    const columnMap = new Map(result.columnRows.map((col) => [col.id, col.name]));
-
-    const rawItems = result.apiResponse.data.treatment_items;
-    const items: TreatmentItem[] = rawItems.map((item: typeof rawItems[number]) => ({
+    const columnMap = new Map(columnRows.map((col) => [col.id, col.name]));
+    const items: TreatmentItem[] = resp.data.treatment_items.map((item) => ({
       ...item,
       resources: item.use_column
-        .map((id: number) => columnMap.get(id))
-        .filter((name: string | undefined): name is string => name !== undefined),
+        .map((id) => columnMap.get(id))
+        .filter((name): name is string => name !== undefined),
     }));
 
-    // キャッシュに保存
     AppointPage.treatmentItemsCache = items;
     AppointPage.treatmentItemsCacheTime = Date.now();
-
     return items;
   }
 
   /**
    * 患者詳細を取得（予約履歴を含む）
+   *
+   * 注意: 旧コードと同じく、APIレスポンスの「ApiResponse包み」をそのまま返す。
+   * 呼び出し側は `result?.result` / `result?.data?.xxx` でアクセスする。
    */
   private async getPatientDetail(patientId: number): Promise<PatientDetailResponse | null> {
-    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
-    return await reserveDayHandle?.evaluate(async (reserveDay, id) => {
-      if (!reserveDay) return null;
-
-      const response = await reserveDay.get<PatientDetailResponse>(
-        `/patients/${id}`,
-        { id, original: true }
-      );
-      return response?.data ?? null;
-    }, patientId) ?? null;
+    const resp = await this.apiClient.get<PatientDetailResponse['data']>(
+      `/patients/${patientId}`,
+      { id: patientId, original: true },
+    );
+    return { result: resp.result, data: resp.data, message: resp.message } as PatientDetailResponse;
   }
 
   /**
@@ -849,34 +860,25 @@ export class AppointPage extends BasePage {
       return AppointPage.webSettingCache;
     }
 
-    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
-    const result = await reserveDayHandle?.evaluate(async (reserveDay) => {
-      if (!reserveDay) return null;
-      const response = await reserveDay.get<WebSettingResponse>('/websetting', {});
-      return response?.data?.data ?? null;
-    }) ?? null;
-
-    if (result) {
-      AppointPage.webSettingCache = result;
+    const resp = await this.apiClient.get<WebSettingData>('/websetting');
+    const data = resp.result ? resp.data : null;
+    if (data) {
+      AppointPage.webSettingCache = data;
       AppointPage.webSettingCacheTime = now;
     }
-    return result;
+    return data;
   }
 
   /**
    * 予約詳細を取得
+   * 旧コードとの互換のため ApiResponse 形式でラップして返す。
    */
   private async getReservationDetail(reservationId: number): Promise<ReservationDetailResponse | null> {
-    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
-    return await reserveDayHandle?.evaluate(async (reserveDay, id) => {
-      if (!reserveDay) return null;
-
-      const response = await reserveDay.get<ReservationDetailResponse>(
-        `/reservations/${id}`,
-        { id, original: true }
-      );
-      return response?.data ?? null;
-    }, reservationId) ?? null;
+    const resp = await this.apiClient.get<ReservationDetailResponse['data']>(
+      `/reservations/${reservationId}`,
+      { id: reservationId, original: true },
+    );
+    return { result: resp.result, data: resp.data, message: resp.message } as ReservationDetailResponse;
   }
 
   /**
@@ -892,43 +894,28 @@ export class AppointPage extends BasePage {
   async searchReservationsByPhone(
     dateFrom: string,
     dateTo: string,
-    customerPhone: string
+    customerPhone: string,
   ): Promise<ReservationSearchResult[]> {
     this.step(`searchReservationsByPhone: start (${customerPhone}, ${dateFrom} - ${dateTo})`);
-    await this.waitForLoading();
 
-    // 患者検索APIのレスポンスを監視
-    const patientsResponsePromise = this.page.waitForResponse(
-      (response) => response.url().includes('/patients?') && response.request().method() === 'GET'
-    );
-
-    // SideMainで患者検索を実行（下4桁で検索）
+    // 患者検索（電話番号下4桁）
     const telLast4 = phoneLast4(customerPhone);
-    {
-      await using sideMain = await this.getVueComponent('SideMain');
-      await sideMain?.evaluate((comp, phone) => {
-        if (comp) {
-          comp.s_q = phone;
-          comp.clickSearch();
-        }
-      }, telLast4);
-    }
+    const patientsResp = await this.apiClient.get<PatientsSearchResponse['data']>('/patients', {
+      or_search: 0,
+      patient_name: '',
+      patient_name_kana: '',
+      tel: telLast4,
+      sort_order: 'patient_number',
+    });
 
-    // 患者検索APIのレスポンスを取得
-    const patientsResponse = await patientsResponsePromise;
-    const patientsData = await patientsResponse.json() as PatientsSearchResponse;
-    this.step(`searchReservationsByPhone: patient search API response received`);
-
-    // 患者が見つからない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
-    if (!patientsData.result || !patientsData.data?.patients?.length) {
-      await using patientList = await this.getVueComponent('PatientList');
-      await patientList?.evaluate((comp) => comp?.clickClose());
+    // 患者が見つからない場合、メモ内の電話番号で検索（フォールバック）
+    if (!patientsResp.result || !patientsResp.data?.patients?.length) {
       return await this.searchReservationsByMemo(dateFrom, dateTo, customerPhone);
     }
 
-    // 電話番号の末尾一致で絞り込み（tel1 → tel2の順で確認、家族など複数人の可能性あり）
+    // 電話番号の末尾一致で絞り込み（tel1 → tel2 の順で確認、家族など複数人の可能性）
     const matchedPatients: PatientSearchItem[] = [];
-    for (const patient of patientsData.data.patients) {
+    for (const patient of patientsResp.data.patients) {
       if (patient.tel1 && phoneEndsWith(patient.tel1, customerPhone)) {
         matchedPatients.push(patient);
       } else {
@@ -939,38 +926,27 @@ export class AppointPage extends BasePage {
       }
     }
 
-    // 電話番号が一致する患者がいない場合、PatientListダイアログを閉じてメモ内の電話番号で検索
     if (matchedPatients.length === 0) {
-      await using patientList = await this.getVueComponent('PatientList');
-      await patientList?.evaluate((comp) => comp?.clickClose());
       return await this.searchReservationsByMemo(dateFrom, dateTo, customerPhone);
     }
 
     const results: ReservationSearchResult[] = [];
 
-    // 各患者の予約を取得
+    // 各患者の予約履歴を取得
     for (const patient of matchedPatients) {
       const patientDetail = await this.getPatientDetail(patient.id);
       if (!patientDetail?.result || !patientDetail.data?.reservation_histories?.length) {
         continue;
       }
 
-      // 日付範囲内の予約履歴をフィルタ
       const filteredHistories = patientDetail.data.reservation_histories.filter(
-        (history) => history.reservation_date >= dateFrom && history.reservation_date <= dateTo
+        (history) => history.reservation_date >= dateFrom && history.reservation_date <= dateTo,
       );
 
-      // 各予約の詳細を取得
       for (const history of filteredHistories) {
         const detail = await this.getReservationDetail(history.id);
-        if (!detail?.result || !detail.data) {
-          continue;
-        }
-
-        // キャンセル済みの予約は除外
-        if (detail.data.cancel) {
-          continue;
-        }
+        if (!detail?.result || !detail.data) continue;
+        if (detail.data.cancel) continue;
 
         results.push({
           appointId: String(detail.data.id),
@@ -1019,40 +995,26 @@ export class AppointPage extends BasePage {
       const remainingDays = Math.min(BATCH_DAYS, diffDays - i);
       const currentDate = batchStartDate.format('YYYY-MM-DD');
 
-      // /reservations APIで複数日分の予約を一括取得
-      await using reserveDay = await this.getVueComponent('ReserveDay');
-      const apiResult = await reserveDay?.evaluate(async (reserveDay, params) => {
-        if (!reserveDay) return null;
+      // /reservations API で複数日分の予約を一括取得
+      const apiResult = await this.apiClient.get<ReservationsListResponse['data']>(
+        '/reservations',
+        { from: currentDate, days: remainingDays },
+      );
 
-        const response = await reserveDay.get<ReservationsListResponse>(
-          '/reservations',
-          { from: params.date, days: params.days }
-        );
-        return response?.data ?? null;
-      }, { date: currentDate, days: remainingDays }) ?? null;
-
-      if (!apiResult?.result || !apiResult.data?.reservations) {
+      if (!apiResult.result || !apiResult.data?.reservations) {
         continue;
       }
 
       // メモ内の電話番号が一致する予約をすべて取得
       const matchedReservations = apiResult.data.reservations.filter((reservation) => {
-        // キャンセル済みは除外
         if (reservation.cancel === 1) return false;
-
-        // メモ内の電話番号を確認
         if (reservation.memo && reservation.memo.length > 0) {
           const memoText = reservation.memo.map((m) => m.memo || '').join(' ');
-          // tel:[電話番号] 形式で電話番号を検索
-          if (memoText.includes(`tel:[${customerPhone}]`)) {
-            return true;
-          }
+          if (memoText.includes(`tel:[${customerPhone}]`)) return true;
         }
-
         return false;
       });
 
-      // 検索結果を追加
       for (const reservation of matchedReservations) {
         results.push({
           appointId: String(reservation.id),
@@ -1063,17 +1025,6 @@ export class AppointPage extends BasePage {
           staffId: String(reservation.column_no),
         });
       }
-    }
-
-    // 結果がある場合、一番最後の日付を読み込み
-    if (results.length > 0) {
-      const lastDate = results.reduce((latest, r) => r.date > latest ? r.date : latest, results[0].date);
-      await using sideMain = await this.getVueComponent('SideMain');
-      await sideMain?.evaluate((calendar, date) => calendar?.clickDay({ id: date }), lastDate);
-      await this.wait(100);
-      await this.waitForLoading();
-      // 予約枠までスクロール
-      await this.scrollToText(`${results.at(-1)!.time}～`);
     }
 
     return results;
@@ -1141,235 +1092,104 @@ export class AppointPage extends BasePage {
     customerPhone?: string;
   }): Promise<{ reservationId: string } | { error: string }> {
     this.step(`createReservation: start (${date} ${timeFrom}, ${customerName})`);
-    console.log(`[DEBUG] createReservation: menu=${JSON.stringify(menu)}, durationMin=${durationMin}`);
 
-    // 1. 予約日を読み込む
+    // 1. 日付設定
     await this.selectDate(date);
 
-    // メニューからtreatment_timeとcolorを取得
+    // 2. メニュー特定（treatment_time / color）
     const matchedItem = await this.findTreatmentItem(menu);
-    console.log(`[DEBUG] createReservation: matchedItem=${JSON.stringify(matchedItem)}`);
     const menuTreatmentTime = matchedItem?.treatment_time;
     const menuColor = matchedItem?.color;
 
-    // 患者検索（patientId未指定の場合、電話番号で自動検索）
-    console.log(`[DEBUG] createReservation: patientSearch check: patientId=${patientId}, customerName=${customerName}, customerPhone=${customerPhone}`);
+    // 3. 患者検索（patientId未指定の場合、電話番号下4桁で /patients を検索）
     if (!patientId && customerPhone) {
-      console.log(`[DEBUG] createReservation: searching patient by phone=${customerPhone}`);
-      // 電話番号の下4桁で検索し、結果を電話番号の末尾一致で絞り込む
       const telLast4 = phoneLast4(customerPhone);
-      await using reserveDay = await this.getVueComponent('ReserveDay');
-      const searchResult = await reserveDay?.evaluate(async (reserveDay, params) => {
-        if (!reserveDay) return null;
-
-        const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
-          or_search: 0,
-          patient_name: '',
-          patient_name_kana: params.customerName || '',
-          tel: params.telLast4,
-          sort_order: 'patient_number',
-        });
-
-        return response?.data ?? null;
-      }, { telLast4, customerName });
-
-      console.log(`[DEBUG] createReservation: searchResult keys=${JSON.stringify(searchResult ? Object.keys(searchResult) : null)}, full=${JSON.stringify(searchResult)?.substring(0, 500)}`);
-      if (searchResult?.result && searchResult.data?.patients?.length) {
-        // 電話番号の末尾一致で絞り込み（tel1 → tel2の順で確認）
-        const matchedPatient = await this.findPatientByPhone(searchResult.data.patients, customerPhone);
+      const searchResp = await this.apiClient.get<PatientsOrSearchResponse['data']>('/patients', {
+        or_search: 0,
+        patient_name: '',
+        patient_name_kana: customerName || '',
+        tel: telLast4,
+        sort_order: 'patient_number',
+      });
+      if (searchResp.result && searchResp.data?.patients?.length) {
+        const matchedPatient = await this.findPatientByPhone(searchResp.data.patients, customerPhone);
         if (matchedPatient) {
           patientId = matchedPatient.patient_number;
           if (matchedPatient.name_kana) {
             customerName = matchedPatient.name_kana;
           }
-          console.log(`[DEBUG] createReservation: patient found, patientId=${patientId}, name_kana=${matchedPatient.name_kana}`);
-        } else {
-          console.log(`[DEBUG] createReservation: no patient matched by phone (candidates=${searchResult.data.patients.length})`);
         }
-      } else {
-        console.log(`[DEBUG] createReservation: no patient found`);
       }
     }
 
-    // メニュー未指定時のデフォルトdurationは先頭メニューのtreatment_timeを使用
+    // 4. duration / timeTo 計算
     const treatmentItems = await this.getTreatmentItems();
     const fallbackDuration = treatmentItems[0]?.treatment_time ?? 45;
-    this.step(`createReservation: fallbackDuration=${fallbackDuration} (from ${treatmentItems.length > 0 ? 'menu cache' : 'hardcoded default'})`);
-
-    // time_toを計算（メニューが一致した場合はメニューの時間を優先）
-    // メニュー時間 > リクエストのdurationMin > 先頭メニューのduration > 45分
     const duration = menuTreatmentTime ?? durationMin ?? fallbackDuration;
-    console.log(`[DEBUG] createReservation: menuTreatmentTime=${menuTreatmentTime}, duration=${duration}`);
-    // メニューが見つかった場合は、渡されたtimeToを無視してメニューの時間から計算
     const calculatedTimeTo = menuTreatmentTime
       ? dayjs(`${date} ${timeFrom}`, 'YYYY-MM-DD HH:mm').add(menuTreatmentTime, 'minute').format('HH:mm')
       : (timeTo || dayjs(`${date} ${timeFrom}`, 'YYYY-MM-DD HH:mm').add(duration, 'minute').format('HH:mm'));
-    console.log(`[DEBUG] createReservation: calculatedTimeTo=${calculatedTimeTo}`);
 
-    // 2. 予約作成ダイアログを開く
-    {
-      await using reserveDay = await this.getVueComponent('ReserveDay');
-      await reserveDay?.evaluate((reserveDay, params) => {
-        if (!reserveDay) throw new Error('ReserveDayコンポーネントが見つかりません');
-
-        reserveDay.$store.commit('openReserveAdd', {
-          column_no: params.column_no,
-          reservation_date: params.reservation_date,
-          time_from: params.time_from,
-          time_to: params.time_to,
-        });
-      }, {
-        column_no: columnNo,
-        reservation_date: date,
-        time_from: timeFrom,
-        time_to: calculatedTimeTo,
-      });
-    }
-
-    // ダイアログが表示されるまで待機
-    await this.page.waitForSelector('.alert-wrapper .alert h2');
-    this.step(`createReservation: dialog opened`);
-
-    {
-      // 3. candidateがアクティブな場合はリセット
-      await using reserveDay = await this.getVueComponent('ReserveDay');
-      await reserveDay?.evaluate((reserveDay) => {
-        if (reserveDay?.candidate?.is_active) {
-          reserveDay.$store.commit('resetCandidate');
-        }
-      });
-    }
-
-    // 4. ReserveAddコンポーネントを取得してフォームに入力
-    // 患者ID入力（既存患者の場合）
+    // 5. patientId 指定時は存在確認
     if (patientId) {
-      // 患者検索APIのレスポンスを監視
-      const patientSearchPromise = this.page.waitForResponse(
-        (response) => response.url().includes('/patients/number/') && response.request().method() === 'GET'
+      const patientResp = await this.apiClient.get<PatientDetailResponse['data']>(
+        `/patients/number/${patientId}`,
       );
-
-      // ReserveAddコンポーネントで患者番号を設定してgetPatient()を呼び出し
-      await using reserveAddHandle = await this.getVueComponent('ReserveAdd');
-      await reserveAddHandle?.evaluate((reserveAdd, patientId) => {
-        if (!reserveAdd) throw new Error('ReserveAddコンポーネントが見つかりません');
-        reserveAdd.form.patient_number = patientId;
-        reserveAdd.getPatient();
-      }, patientId);
-
-      // 患者検索APIのレスポンスを確認
-      const patientSearchResponse = await patientSearchPromise;
-      const patientSearchData = await patientSearchResponse.json() as { result: boolean; data: unknown; message: Record<string, string[]> | null };
-
-      if (!patientSearchData.result) {
-        // 患者が見つからなかった場合、アラートダイアログを閉じる
-        const alertCloseButton = await this.page.$('#alert_common_wrapper .alert_common_label_close');
-        if (alertCloseButton) {
-          await alertCloseButton.click();
-          // アラートが閉じるまで待機
-          await this.page.waitForSelector('#alert_common_wrapper', { state: 'hidden' }).catch(() => {});
-        }
-
-        // 予約作成ダイアログを閉じる（ReserveAdd.clickClose()を使用）
-        await reserveAddHandle?.evaluate((reserveAdd) => reserveAdd?.clickClose());
-
+      if (!patientResp.result) {
         return { error: `患者ID「${patientId}」が見つかりません` };
       }
     }
 
-    // 予約名（顧客名）、表示色、メモをReserveAddコンポーネントで設定
-    {
-      await using reserveAddHandle = await this.getVueComponent('ReserveAdd');
-      await reserveAddHandle?.evaluate((reserveAdd, params) => {
-        if (!reserveAdd) throw new Error('ReserveAddコンポーネントが見つかりません');
+    // 6. memo組み立て（メニュー名・電話番号）
+    const menuName = matchedItem?.title || menu?.menu_name;
+    const memo = menuName
+      ? [{ id: 1, memo: `【SmartCall予約】 症状:[${menuName}]、tel:[${customerPhone || ''}]` }]
+      : [];
 
-        // 予約名（顧客名）を入力
-        reserveAdd.form.patient_name = params.customerName;
+    // 7. POST /reservations
+    const postResp = await this.apiClient.post<{ confirmation?: string }>('/reservations', {
+      patient_number: patientId ?? '',
+      reservation_date: date,
+      column_no: columnNo,
+      time_from: timeFrom,
+      time_to: calculatedTimeTo,
+      patient_name: customerName,
+      treatment_id: matchedItem?.id ?? null,
+      color: menuColor ?? '#FFFFFF',
+      pic: [null, null, null],
+      memo,
+    });
 
-        // 表示色を設定
-        if (params.menuColor) {
-          reserveAdd.form.color = params.menuColor;
-        }
-
-        // 予約メモにメニュー名を入力
-        if (params.menuName) {
-          reserveAdd.addMemo();
-          if (reserveAdd.form.memo.length > 0) {
-            reserveAdd.form.memo[0].memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone || ''}]`;
-          }
-        }
-      }, { customerName, menuColor, menuName: matchedItem?.title || menu?.menu_name, customerPhone });
+    // 8. confirmation がある場合は失敗（診療時間外など）
+    if (postResp.data?.confirmation) {
+      const confirmationMessages = JSON.parse(postResp.data.confirmation) as string[];
+      return { error: confirmationMessages.join(' ') };
     }
 
-    // 5. 予約APIのレスポンスを監視（POST: 作成、GET: 予約一覧取得）
-    const postResponsePromise = this.page.waitForResponse(
-      (response) => response.url().includes('/reservations') && response.request().method() === 'POST'
-    );
-    const getResponsePromise = this.page.waitForResponse(
-      (response) => response.url().includes('/reservations?') && response.request().method() === 'GET'
-    );
-
-    // 「予約を作成」ボタンをクリック
-    const createButton = await this.page.$('.alert-wrapper .contentfooter button.btn-primary');
-    if (!createButton) {
-      return { error: '予約作成ボタンが見つかりません' };
-    }
-    await createButton.click();
-
-    // 6. POSTレスポンスを確認
-    const postResponse = await postResponsePromise;
-    const postResponseData = await postResponse.json() as ReservationApiResponse;
-    this.step(`createReservation: POST response received`);
-
-    // confirmationがある場合は失敗（診療時間外など）
-    if (postResponseData.confirmation) {
-      const confirmationMessages = JSON.parse(postResponseData.confirmation) as string[];
-      const errorMessage = confirmationMessages.join(' ');
-      console.error(`[AppointPage] 予約作成失敗（確認メッセージ）: ${errorMessage}`);
-
-      // ページをリロードしてダイアログを閉じる
-      await this.reload();
-      await this.waitForLoading();
-
-      return { error: errorMessage };
-    }
-
-    // resultがfalseの場合は失敗
-    if (!postResponseData.result) {
+    // 9. result false なら失敗
+    if (!postResp.result) {
       let errorMessage = '予約作成に失敗しました';
-      if (postResponseData.message) {
-        const messages = Object.values(postResponseData.message).flat();
+      if (postResp.message) {
+        const messages = typeof postResp.message === 'string'
+          ? [postResp.message]
+          : Object.values(postResp.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
-      console.error(`[AppointPage] 予約作成失敗: ${errorMessage}`);
-
-      // ページをリロードしてダイアログを閉じる
-      await this.reload();
-      await this.waitForLoading();
-
       return { error: errorMessage };
     }
 
-    // 7. GETレスポンスから作成された予約IDを特定
-    const getResponse = await getResponsePromise;
-    const getResponseData = await getResponse.json() as ReservationsListResponse;
-
-    if (!getResponseData.result || !getResponseData.data?.reservations) {
+    // 10. GET /reservations で作成された予約を特定（POSTレスポンスにIDが返らないため）
+    const getResp = await this.apiClient.get<ReservationsListResponse['data']>('/reservations', {
+      from: date,
+      days: 1,
+    });
+    if (!getResp.result || !getResp.data?.reservations) {
       return { error: '予約一覧の取得に失敗しました' };
     }
 
-    // 作成した予約を特定（time_from, time_to, patient_name で絞り込み）
-    const createdReservation = getResponseData.data.reservations.find((reservation) => {
-      // 時間が一致するかチェック
-      if (reservation.time_from !== timeFrom || reservation.time_to !== calculatedTimeTo) {
-        return false;
-      }
-
-      // 患者番号が指定されている場合はpatient_numberで照合
-      if (patientId) {
-        return reservation.patient_number === patientId;
-      }
-
-      // 新規予約の場合はpatient_nameで照合
+    const createdReservation = getResp.data.reservations.find((reservation) => {
+      if (reservation.time_from !== timeFrom || reservation.time_to !== calculatedTimeTo) return false;
+      if (patientId) return reservation.patient_number === patientId;
       return reservation.patient_name === customerName;
     });
 
@@ -1377,8 +1197,6 @@ export class AppointPage extends BasePage {
       console.error(`[AppointPage] 作成した予約が見つかりませんでした: ${customerName} ${timeFrom}-${calculatedTimeTo}`);
       return { error: '作成した予約が見つかりませんでした' };
     }
-
-    await this.waitForLoading();
 
     this.step(`createReservation: complete (reservationId: ${createdReservation.id})`);
     return { reservationId: String(createdReservation.id) };
@@ -1521,17 +1339,11 @@ export class AppointPage extends BasePage {
 
             if (tagPatientNumber) {
               // 患者番号で直接検索（/patients/number/{patient_number}）
-              await using reserveDay = await this.getVueComponent('ReserveDay');
-              const patientResult = await reserveDay?.evaluate(async (rd, patientNumber) => {
-                if (!rd) return null;
-                const response = await rd.get<PatientDetailResponse>(
-                  `/patients/number/${patientNumber}`,
-                  {}
-                );
-                return response?.data ?? null;
-              }, tagPatientNumber) ?? null;
+              const patientResult = await this.apiClient.get<PatientDetailResponse['data']>(
+                `/patients/number/${tagPatientNumber}`,
+              );
 
-              if (patientResult?.result && patientResult.data) {
+              if (patientResult.result && patientResult.data) {
                 // 生年月日の一致チェック
                 if (tagBirthday && patientResult.data.birthday !== tagBirthday) {
                   console.log(`[DEBUG] [patient]タグ: 生年月日不一致 (期待:${tagBirthday}, 実際:${patientResult.data.birthday})`);
@@ -1729,20 +1541,6 @@ export class AppointPage extends BasePage {
         }
       }
     }
-    await this.waitForNavigation();
-    await this.waitForLoading();
-
-    if (reservations.length && reservations.at(-1)?.slot?.start_at) {
-      const time = reservations.at(-1)?.slot?.start_at
-      if (time) {
-        await this.scrollToText(`${time}～`);
-      }
-      const desiredTime = reservations.at(-1)?.slot?.desired?.time
-      if (desiredTime) {
-        await this.scrollToText(`${desiredTime}～`);
-      }
-    }
-
     this.step(`processReservations: complete (${results.length} results)`);
     return results;
   }
@@ -1760,45 +1558,33 @@ export class AppointPage extends BasePage {
   async findReservationByPhoneAndTime(
     date: string,
     time: string,
-    customerPhone: string
+    customerPhone: string,
   ): Promise<{ reservationId: string; columnNo: number; pic: { id: number; name: string }[] | null } | null> {
     // /reservations APIで指定日の予約を取得
-    await using reserveDayHandle = await this.getVueComponent('ReserveDay');
-    const result = await reserveDayHandle?.evaluate(async (reserveDay, date) => {
-      if (!reserveDay) return null;
-
-      const response = await reserveDay.get<ReservationsListResponse>(
-        '/reservations',
-        { from: date, days: 1 }
-      );
-      return response?.data ?? null;
-    }, date) ?? null;
-
-    if (!result?.result || !result.data?.reservations) {
+    const resp = await this.apiClient.get<ReservationsListResponse['data']>(
+      '/reservations',
+      { from: date, days: 1 },
+    );
+    if (!resp.result || !resp.data?.reservations) {
       return null;
     }
 
+    const reservations = resp.data.reservations;
+
     // 時刻と電話番号（メモ内）が一致する予約を探す
-    const matched = result.data.reservations.find((reservation) => {
-      // キャンセル済みは除外
+    let matched = reservations.find((reservation) => {
       if (reservation.cancel === 1) return false;
-
-      // 時刻が一致するか確認
       if (time && reservation.time_from !== time) return false;
-
-      // メモ内の電話番号を確認
       if (reservation.memo && reservation.memo.length > 0) {
         const memoText = reservation.memo.map((m) => m.memo || '').join(' ');
-        // tel:[電話番号] 形式で電話番号を検索
-        if (memoText.includes(`tel:[${customerPhone}]`)) {
-          return true;
-        }
+        if (memoText.includes(`tel:[${customerPhone}]`)) return true;
       }
-
       return false;
-    }) || await (async (reservations: typeof result.data.reservations) => {
-      // フォールバック: patient_numberから電話番号の正引きでマッチング
-      // メモに電話番号が記録されていない予約（EasyApo直接登録等）に対応
+    });
+
+    // フォールバック: patient_number から電話番号の正引きでマッチング
+    // （メモに電話番号が記録されていない予約 = EasyApo直接登録等 に対応）
+    if (!matched) {
       const timeCandidates = reservations.filter((reservation) => {
         if (reservation.cancel === 1) return false;
         if (time && reservation.time_from !== time) return false;
@@ -1806,25 +1592,18 @@ export class AppointPage extends BasePage {
       });
 
       if (timeCandidates.length > 0) {
-        // 電話番号の下4桁で患者を検索し、末尾一致で絞り込んでpatient_numberでマッチング
         const telLast4 = phoneLast4(customerPhone);
-        await using reserveDayHandle2 = await this.getVueComponent('ReserveDay');
-        const searchResult = await reserveDayHandle2?.evaluate(async (reserveDay, params) => {
-          if (!reserveDay) return null;
-          const response = await reserveDay.get<PatientsOrSearchResponse>('/patients', {
-            or_search: 0,
-            patient_name: '',
-            patient_name_kana: '',
-            tel: params.telLast4,
-            sort_order: 'patient_number',
-          });
-          return response?.data ?? null;
-        }, { telLast4 }) ?? null;
+        const searchResp = await this.apiClient.get<PatientsOrSearchResponse['data']>('/patients', {
+          or_search: 0,
+          patient_name: '',
+          patient_name_kana: '',
+          tel: telLast4,
+          sort_order: 'patient_number',
+        });
 
-        if (searchResult?.result && searchResult.data?.patients?.length) {
-          // 電話番号の末尾一致で絞り込んだ患者のpatient_numberを収集（tel1 → tel2の順で確認）
+        if (searchResp.result && searchResp.data?.patients?.length) {
           const phoneMatchedPatients: PatientSearchItem[] = [];
-          for (const p of searchResult.data.patients) {
+          for (const p of searchResp.data.patients) {
             if (p.tel1 && phoneEndsWith(p.tel1, customerPhone)) {
               phoneMatchedPatients.push(p);
             } else {
@@ -1835,53 +1614,22 @@ export class AppointPage extends BasePage {
             }
           }
           const matchedPatientNumbers = new Set(
-            phoneMatchedPatients.map((p) => p.patient_number)
+            phoneMatchedPatients.map((p) => p.patient_number),
           );
-
-          // 時刻候補からpatient_numberが一致する予約を探す
-          const fallbackMatched = timeCandidates.find(
-            (reservation) => matchedPatientNumbers.has(reservation.patient_number)
+          matched = timeCandidates.find(
+            (reservation) => matchedPatientNumbers.has(reservation.patient_number),
           );
-
-          if (fallbackMatched) {
-            return fallbackMatched;
-          }
         }
       }
-    })(result.data.reservations);
-
-    if (!matched) {
-      return null;
     }
 
-    // 予約枠までスクロール
-    await this.scrollToText(`${matched.time_from}～`);
+    if (!matched) return null;
 
     return {
       reservationId: String(matched.id),
       columnNo: matched.column_no,
       pic: matched.pic ?? null,
     };
-  }
-
-  /**
-   * 予約編集ダイアログを開く
-   *
-   * @param reservationId 予約ID
-   */
-  private async openReserveEditDialog(reservationId: string): Promise<void> {
-    // 予約編集ダイアログを開く
-    {
-      await using reserveDayHandle = await this.getVueComponent('ReserveDay');
-      await reserveDayHandle?.evaluate((reserveDay, id) => {
-        if (!reserveDay) throw new Error('ReserveDayコンポーネントが見つかりません');
-        reserveDay.openReserveEdit(parseInt(id, 10));
-      }, reservationId);
-    }
-
-    // ダイアログが表示されるまで待機
-    await this.page.waitForSelector('.alert-wrapper .alert h2');
-    await this.waitForLoading();
   }
 
   /**
@@ -1910,56 +1658,48 @@ export class AppointPage extends BasePage {
   }): Promise<{ reservationId: string } | { error: string; pic?: { id: number; name: string }[] }> {
     this.step(`updateReservation: start (${date} ${time}, ${customerPhone})`);
 
-    // 1. 予約日を読み込む
+    // 1. 日付設定
     await this.selectDate(date);
 
-    // 2. 予約を見つける
+    // 2. 予約特定
     const found = await this.findReservationByPhoneAndTime(date, time, customerPhone);
     if (!found) {
       return { error: `予約が見つかりません: ${date} ${time} ${customerPhone}` };
     }
     this.step(`updateReservation: reservation found (id: ${found.reservationId})`);
 
-    // menuが指定されていない場合、既存の予約からメニューを特定する。
+    // 3. 既存予約の完全データを取得（更新body組み立てのベース）
+    const detail = await this.getReservationDetail(parseInt(found.reservationId, 10));
+    const existing = detail?.data;
+    if (!existing) {
+      return { error: '予約詳細の取得に失敗しました' };
+    }
+
+    // 4. menu未指定なら既存memoから「【SmartCall予約】 症状:[xxx]」を解析して復元
     if (!menu?.menu_name && !menu?.external_menu_id) {
-      await using reserveDay = await this.getVueComponent('ReserveDay');
-      const reservationData = await reserveDay?.evaluate(async (reserveDay, reservationId) => {
-        if (!reserveDay) return null;
-
-        const response = await reserveDay.get<ReservationsGetResponse>(
-          `/reservations/${reservationId}`,
-          { id: reservationId, original: true }
-        );
-        return response?.data?.data ?? null;
-      }, found.reservationId) ?? null;
-
-      if (reservationData) {
-        // memoから「【SmartCall予約】 症状:[xxx]」パターンを抽出
-        const smartcallMemo = reservationData.memo?.find(m => m.memo?.includes('【SmartCall予約】'));
-        if (smartcallMemo?.memo) {
-          const match = smartcallMemo.memo.match(/症状:\[([^\]]*)\]/);
-          if (match?.[1]) {
-            if (!menu) menu = { menu_name: '' }
-            menu.menu_name = match[1];
-            this.step(`updateReservation: extracted menu name from memo: ${menu.menu_name}`);
-          }
+      const smartcallMemo = existing.memo?.find((m) => m.memo?.includes('【SmartCall予約】'));
+      if (smartcallMemo?.memo) {
+        const match = smartcallMemo.memo.match(/症状:\[([^\]]*)\]/);
+        if (match?.[1]) {
+          if (!menu) menu = { menu_name: '' };
+          menu.menu_name = match[1];
+          this.step(`updateReservation: extracted menu name from memo: ${menu.menu_name}`);
         }
       }
     }
-    
-    // メニューからcolor、treatment_timeを取得
+
+    // 5. メニュー特定
     const matchedItem = await this.findTreatmentItem(menu);
     const menuColor = matchedItem?.color;
     const menuTreatmentTime = matchedItem?.treatment_time;
 
-    // 2.5. 日時変更がありpicが設定されている場合、変更先でpicが空いているかチェック
+    // 6. 日時変更ありかつpicが設定されている場合、変更先でpicが空いているかチェック
     if ((desired?.date || desired?.time) && found.pic?.length) {
       const targetDate = desired.date || date;
       const targetTime = desired.time || time;
-      const picIds = found.pic.map(p => p.id);
+      const picIds = found.pic.map((p) => p.id);
       const durationMin = menuTreatmentTime ?? 45;
 
-      // 変更先の日付データを取得
       await this.selectDate(targetDate);
       const targetDayData = await this.getReserveDayData();
 
@@ -1967,7 +1707,7 @@ export class AppointPage extends BasePage {
         const startTimeNum = String(targetDayData.start_hour).padStart(2, '0') + String(targetDayData.start_minute).padStart(2, '0');
         const endTimeNum = String(targetDayData.end_hour).padStart(2, '0') + String(targetDayData.end_minute).padStart(2, '0');
         const timeRows = targetDayData.time_rows.filter(
-          (tr) => tr.time_num >= startTimeNum && tr.time_num < endTimeNum
+          (tr) => tr.time_num >= startTimeNum && tr.time_num < endTimeNum,
         );
         const targetTimeNum = targetTime.replace(':', '');
         const startIndex = timeRows.findIndex((tr) => tr.time_num === targetTimeNum);
@@ -1976,13 +1716,10 @@ export class AppointPage extends BasePage {
         if (startIndex !== -1) {
           const picAvailable = this.isPicAvailable(
             picIds, timeRows, startIndex, requiredSlots,
-            targetDayData.reserve_rows, Number(found.reservationId)
+            targetDayData.reserve_rows, Number(found.reservationId),
           );
-
           if (!picAvailable) {
-            const picNames = found.pic.map(p => p.name).join('、');
-            this.step(`updateReservation: pic unavailable (${picNames}) at ${targetDate} ${targetTime}`);
-            // 元の日付に戻す
+            const picNames = found.pic.map((p) => p.name).join('、');
             await this.selectDate(date);
             return {
               error: `担当者（${picNames}）が指定の時間帯（${targetDate} ${targetTime}）に空いていません`,
@@ -1991,119 +1728,77 @@ export class AppointPage extends BasePage {
           }
         }
       }
-
-      // 元の日付に戻してから予約編集ダイアログを開く
       await this.selectDate(date);
     }
 
-    // 3. 予約編集ダイアログを開く
-    await this.openReserveEditDialog(found.reservationId);
-    await this.waitForLoading()
-    this.step(`updateReservation: edit dialog opened`);
+    // 7. 更新body組み立て（既存データをベースに変更を適用）
+    const parseHm = (t: string): [number, number] => {
+      const [h, m] = t.split(':').map((s) => parseInt(s, 10));
+      return [Number.isNaN(h) ? 0 : h, Number.isNaN(m) ? 0 : m];
+    };
+    const buildBody = (columnNo?: number) => {
+      let newReservationDate = existing.reservation_date;
+      let newTimeFrom = existing.time_from;
+      let newTimeTo = existing.time_to;
 
-    // 4. ReserveEditコンポーネントを取得してフォームを更新
-    const calculatedTimeTo = menuTreatmentTime
-      ? dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm').add(menuTreatmentTime, 'minute').format('HH:mm')
-      : null;
+      if (desired?.date) newReservationDate = desired.date;
+      if (desired?.time) {
+        // 所要時間を維持して終了時刻を計算
+        const [fromH, fromM] = parseHm(existing.time_from);
+        const [toH, toM] = parseHm(existing.time_to);
+        const durationMinutes = (toH * 60 + toM) - (fromH * 60 + fromM);
+        newTimeFrom = desired.time;
+        const [newFromH, newFromM] = parseHm(desired.time);
+        const newToMins = newFromH * 60 + newFromM + (durationMinutes > 0 ? durationMinutes : 45);
+        newTimeTo = `${String(Math.floor(newToMins / 60)).padStart(2, '0')}:${String(newToMins % 60).padStart(2, '0')}`;
+      } else if (menuTreatmentTime) {
+        // メニュー変更による所要時間変更
+        newTimeTo = dayjs(`${date} ${time}`, 'YYYY-MM-DD HH:mm')
+          .add(menuTreatmentTime, 'minute')
+          .format('HH:mm');
+      }
 
-    await using reserveEditHandle = await this.getVueComponent('ReserveEdit');
-    const updatedFormData = await reserveEditHandle?.evaluate(async (reserveEdit, params) => {
-      if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
-
-      // 編集対象の読み込み完了を待機
-      await new Promise<void>(res => {
-        const checkLoaded = () => {
-          if (reserveEdit.is_loaded) {
-            res();
-          } else {
-            setTimeout(checkLoaded, 100);
-          }
-        };
-        checkLoaded();
-      });
-
-      // メモを更新
-      if (params.menuName) {
-        const memoItem = reserveEdit.form.memo?.find(item => item.memo.includes('【SmartCall予約】'))
-        if (memoItem) {
-          // 既存のメモを更新
-          memoItem.memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`;
+      // memo更新（既存の【SmartCall予約】メモを上書き、なければ追加）
+      const memo: Array<{ id: number; memo: string }> = existing.memo
+        ? existing.memo.map((m) => ({ id: m.id, memo: m.memo ?? '' }))
+        : [];
+      const menuName = matchedItem?.title || menu?.menu_name;
+      if (menuName) {
+        const newMemoText = `【SmartCall予約】 症状:[${menuName}]、tel:[${customerPhone}]`;
+        const idx = memo.findIndex((m) => m.memo.includes('【SmartCall予約】'));
+        if (idx >= 0) {
+          memo[idx] = { ...memo[idx], memo: newMemoText };
         } else {
-          // メモがない場合は追加
-          reserveEdit.form.memo.push({
-            id: 1,
-            memo: `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`,
-          });
+          memo.push({ id: 1, memo: newMemoText });
         }
       }
 
-      // 表示色を更新
-      if (params.menuColor) {
-        reserveEdit.form.color = params.menuColor;
-      }
-
-      // 予約日を更新
-      if (params.desiredDate) {
-        reserveEdit.form.reservation_date = params.desiredDate;
-      }
-
-      // 開始時間を更新（終了時刻も連動してずらす）
-      if (params.desiredTime) {
-        // 時刻文字列をパースするヘルパー
-        const parseTime = (time: string): [number, number] => {
-          const parts = time.split(':');
-          const h = parseInt(parts[0] ?? '', 10);
-          const m = parseInt(parts[1] ?? '', 10);
-          return [Number.isNaN(h) ? 0 : h, Number.isNaN(m) ? 0 : m];
-        };
-
-        // 現在の開始・終了時刻から所要時間を計算
-        const [fromH, fromM] = parseTime(reserveEdit.form.time_from);
-        const [toH, toM] = parseTime(reserveEdit.form.time_to);
-        const durationMinutes = (toH * 60 + toM) - (fromH * 60 + fromM);
-
-        // 新しい開始時刻を設定
-        reserveEdit.form.time_from = params.desiredTime;
-
-        // 新しい終了時刻を計算（所要時間を維持）
-        const [newFromH, newFromM] = parseTime(params.desiredTime);
-        const newToMinutes = newFromH * 60 + newFromM + (durationMinutes > 0 ? durationMinutes : 45);
-        const newToH = Math.floor(newToMinutes / 60);
-        const newToM = newToMinutes % 60;
-        reserveEdit.form.time_to = `${String(newToH).padStart(2, '0')}:${String(newToM).padStart(2, '0')}`;
-      }
-
-      // 終了時間を更新（メニュー変更による所要時間変更の場合）
-      if (params.timeTo && !params.desiredTime) {
-        reserveEdit.form.time_to = params.timeTo;
-      }
-
-      // 更新後のフォーム値を返す（リトライ時に再利用）
       return {
-        reservationDate: reserveEdit.form.reservation_date,
-        timeFrom: reserveEdit.form.time_from,
-        timeTo: reserveEdit.form.time_to,
+        id: existing.id,
+        column_no: columnNo ?? existing.column_no,
+        status: existing.status,
+        reservation_date: newReservationDate,
+        time_from: newTimeFrom,
+        time_to: newTimeTo,
+        treatment_id: matchedItem?.id ?? existing.treatment_id ?? null,
+        patient_name: existing.patient_name,
+        color: menuColor ?? existing.color ?? '#FFFFFF',
+        pic: existing.pic ?? [null, null, null],
+        memo,
+        patient_number: existing.patient?.patient_number ?? '',
       };
-    }, { menuName: matchedItem?.title || menu?.menu_name, customerPhone, menuColor, timeTo: calculatedTimeTo, desiredDate: desired?.date, desiredTime: desired?.time });
+    };
 
-    // 5. メニューの担当者対応可否をチェック、対応不可なら別の担当者を探す
+    // 8. メニュー対応可能担当者チェック、必要なら別担当者を割り当て
+    let targetColumnNo: number | undefined;
     if (matchedItem?.use_column?.length) {
       const allowedColumnIds = new Set(matchedItem.use_column);
       if (!allowedColumnIds.has(found.columnNo)) {
-        // 現在の担当者では対応不可。同一日時で空いている対応可能な担当者を探す
         const durationMin = menuTreatmentTime ?? 45;
         const availableStaffId = await this.findAvailableStaff(time, durationMin, menu);
-
         if (availableStaffId && allowedColumnIds.has(availableStaffId)) {
-          // 対応可能な担当者が見つかった → 担当者を変更
-          await reserveEditHandle?.evaluate((reserveEdit, newColumnNo) => {
-            if (reserveEdit) {
-              reserveEdit.form.column_no = newColumnNo;
-            }
-          }, availableStaffId);
+          targetColumnNo = availableStaffId;
         } else {
-          // 対応可能な担当者がいない → エラー
-          await reserveEditHandle?.evaluate(reserveEdit => reserveEdit?.clickClose());
           return {
             error: `メニュー「${matchedItem.title}」は現在の担当者では対応できません。同一時間帯に空いている対応可能な担当者もいません`,
           };
@@ -2111,172 +1806,57 @@ export class AppointPage extends BasePage {
       }
     }
 
-    // 6. 更新APIのレスポンスを監視
-    const postResponsePromise = this.page.waitForResponse(
-      (response) => {
-        const url = response.url();
-        // /reservations/{id} へのPOST（数字IDを含むURL）
-        return /\/reservations\/\d+$/.test(url) && response.request().method() === 'POST';
-      }
+    // 9. POST /reservations/{id} で更新
+    const postResp = await this.apiClient.post<{ confirmation?: string }>(
+      `/reservations/${found.reservationId}`,
+      buildBody(targetColumnNo),
     );
 
-    // 「更新」ボタンをクリック
-    await reserveEditHandle?.evaluate((reserveEdit) => reserveEdit?.clickExec());
-
-    // 7. POSTレスポンスを確認
-    const postResponse = await postResponsePromise;
-    const postResponseData = await postResponse.json() as ReservationApiResponse;
-    this.step(`updateReservation: POST response received`);
-
-    // confirmationがある場合は失敗（診療時間外など）
-    if (postResponseData.confirmation) {
-      const confirmationMessages = JSON.parse(postResponseData.confirmation) as string[];
-      const errorMessage = confirmationMessages.join(' ');
-      console.error(`[AppointPage] 予約更新失敗（確認メッセージ）: ${errorMessage}`);
-
-      // ページをリロードしてダイアログを閉じる
-      await this.reload();
-      await this.waitForLoading();
-
-      return { error: errorMessage };
+    // 10. confirmation がある場合は失敗
+    if (postResp.data?.confirmation) {
+      const confirmationMessages = JSON.parse(postResp.data.confirmation) as string[];
+      return { error: confirmationMessages.join(' ') };
     }
 
-    // resultがfalseの場合は失敗
-    if (!postResponseData.result) {
+    // 11. result false なら、「別の予約」エラー時は他担当者へのリトライ
+    if (!postResp.result) {
       let errorMessage = '予約更新に失敗しました';
-      if (postResponseData.message) {
-        const messages = typeof postResponseData.message === 'string' ? [postResponseData.message] : Object.values(postResponseData.message).flat();
+      if (postResp.message) {
+        const messages = typeof postResp.message === 'string'
+          ? [postResp.message]
+          : Object.values(postResp.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
 
-      // エラーメッセージに「別の予約」が含まれている場合、
-      // 日時変更で、別の予約と衝突しているので他の担当者への再割り当てを試行する
       if (errorMessage.includes('別の予約') && (desired?.date || desired?.time)) {
-        console.debug(`[AppointPage] 別の予約との衝突を検出。他の担当者への再割り当てを試行します`);
-
-        // ページをリロードして再試行
-        await this.reload();
-        await this.waitForLoading();
-
-        // 変更後の日時で空いている担当者を検索
         const targetDate = desired.date || date;
         const targetTime = desired.time || time;
         await this.selectDate(targetDate);
-        await this.waitForLoading();
-
         const durationMin = menuTreatmentTime ?? 45;
         const availableStaffId = await this.findAvailableStaff(targetTime, durationMin, menu);
-
         if (availableStaffId) {
-          // 空いている担当者が見つかった → 再試行
-          console.debug(`[AppointPage] 空き担当者が見つかりました (column_no: ${availableStaffId})。再試行します`);
-
-          // 予約編集ダイアログを再度開く
-          await this.selectDate(date);
-          await this.openReserveEditDialog(found.reservationId);
-          await this.waitForLoading();
-
-          // ReserveEditコンポーネントで担当者を変更して更新
-          // 最初の更新で計算済みのフォーム値を再利用（日時計算の重複を回避）
-          await using retryReserveEditHandle = await this.getVueComponent('ReserveEdit');
-          await retryReserveEditHandle?.evaluate(async (reserveEdit, params) => {
-            if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
-
-            // 編集対象の読み込み完了を待機
-            await new Promise<void>(res => {
-              const checkLoaded = () => {
-                if (reserveEdit.is_loaded) {
-                  res();
-                } else {
-                  setTimeout(checkLoaded, 100);
-                }
-              };
-              checkLoaded();
-            });
-
-            // 担当者を変更
-            reserveEdit.form.column_no = params.newColumnNo;
-
-            // 最初の更新で計算済みのフォーム値をそのまま設定
-            if (params.formData) {
-              reserveEdit.form.reservation_date = params.formData.reservationDate;
-              reserveEdit.form.time_from = params.formData.timeFrom;
-              reserveEdit.form.time_to = params.formData.timeTo;
-            }
-
-            // メニュー変更がある場合はメモと色も更新
-            if (params.menuName) {
-              const memoItem = reserveEdit.form.memo.find(item => item.memo.includes('【SmartCall予約】'));
-              if (memoItem) {
-                memoItem.memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`;
-              } else {
-                reserveEdit.addMemo();
-                const newMemo = reserveEdit.form.memo.at(-1);
-                if (newMemo) {
-                  newMemo.memo = `【SmartCall予約】 症状:[${params.menuName}]、tel:[${params.customerPhone}]`;
-                }
-              }
-            }
-            if (params.menuColor) {
-              reserveEdit.form.color = params.menuColor;
-            }
-          }, {
-            newColumnNo: availableStaffId,
-            formData: updatedFormData,
-            menuName: matchedItem?.title,
-            menuColor,
-            customerPhone,
-          });
-
-          // 再度更新を試行
-          const retryPostResponsePromise = this.page.waitForResponse(
-            (response) => {
-              const url = response.url();
-              return /\/reservations\/\d+$/.test(url) && response.request().method() === 'POST';
-            }
+          const retryResp = await this.apiClient.post<{ confirmation?: string }>(
+            `/reservations/${found.reservationId}`,
+            buildBody(availableStaffId),
           );
-
-          await retryReserveEditHandle?.evaluate((reserveEdit) => reserveEdit?.clickExec());
-
-          const retryPostResponse = await retryPostResponsePromise;
-          const retryPostResponseData = await retryPostResponse.json() as ReservationApiResponse;
-
-          if (retryPostResponseData.result) {
-            console.debug(`[AppointPage] 担当者変更による再試行が成功しました`);
-            await this.waitForLoading();
+          if (retryResp.result && !retryResp.data?.confirmation) {
+            this.step(`updateReservation: complete (retry with column ${availableStaffId})`);
             return { reservationId: found.reservationId };
           }
-
-          // 再試行も失敗した場合
           let retryErrorMessage = '予約更新に失敗しました（再試行後）';
-          if (retryPostResponseData.message) {
-            const messages = typeof retryPostResponseData.message === 'string'
-              ? [retryPostResponseData.message]
-              : Object.values(retryPostResponseData.message).flat();
+          if (retryResp.message) {
+            const messages = typeof retryResp.message === 'string'
+              ? [retryResp.message]
+              : Object.values(retryResp.message).flat();
             retryErrorMessage = messages.join(' ') || retryErrorMessage;
           }
-          console.error(`[AppointPage] 予約更新失敗（再試行後）: ${retryErrorMessage}`);
-
-          await this.reload();
-          await this.waitForLoading();
           return { error: retryErrorMessage };
         }
-
-        // 空いている担当者が見つからなかった
-        console.error(`[AppointPage] 空き担当者が見つかりませんでした`);
         return { error: `${errorMessage}（空いている担当者が見つかりませんでした）` };
       }
 
-      console.error(`[AppointPage] 予約更新失敗: ${errorMessage}`);
-
-      // ページをリロードしてダイアログを閉じる
-      await this.reload();
-      await this.waitForLoading();
-
       return { error: errorMessage };
     }
-
-    await this.waitForLoading();
 
     this.step(`updateReservation: complete (reservationId: ${found.reservationId})`);
     return { reservationId: found.reservationId };
@@ -2318,77 +1898,37 @@ export class AppointPage extends BasePage {
     const operationName = isDelete ? '削除' : 'キャンセル';
     this.step(`cancelOrDeleteReservation: start ${operationName} (${date} ${time}, ${customerPhone})`);
 
-    // 1. 予約日を読み込む
+    // 1. 日付設定
     await this.selectDate(date);
 
-    // 2. 予約を見つける
+    // 2. 予約特定
     const found = await this.findReservationByPhoneAndTime(date, time, customerPhone);
     if (!found) {
       return { error: `予約が見つかりません: ${date} ${time} ${customerPhone}` };
     }
     this.step(`cancelOrDeleteReservation: reservation found (id: ${found.reservationId})`);
 
-    // 3. 予約編集ダイアログを開く
-    await this.openReserveEditDialog(found.reservationId);
-    this.step(`cancelOrDeleteReservation: edit dialog opened`);
-
-    // 4. 「予約をキャンセル」ボタンをクリック
-    {
-      await using reserveEditHandle = await this.getVueComponent('ReserveEdit');
-      await reserveEditHandle?.evaluate((reserveEdit) => {
-        if (!reserveEdit) throw new Error('ReserveEditコンポーネントが見つかりません');
-        reserveEdit.clickReserveCancel();
-      });
-    }
-
-    // キャンセルダイアログが表示されるまで待機
-    await this.page.waitForSelector('.alert-wrapper .alert-dlList');
-
-    // 5. CancelAddコンポーネントのformを直接操作
-    await using cancelAddHandle = await this.getVueComponent('CancelAdd');
-    await cancelAddHandle?.evaluate((cancelAdd, params) => {
-      if (!cancelAdd) throw new Error('CancelAddコンポーネントが見つかりません');
-
-      cancelAdd.form.circumstance_type = params.circumstanceType;
-      if (params.cancelType !== undefined) {
-        cancelAdd.form.cancel_type = params.cancelType;
-      }
-    }, {
-      circumstanceType,
-      cancelType: isDelete ? undefined : AppointPage.CANCEL_TYPE.TEL,
-    });
-
-    // 6. APIレスポンスを監視
-    const postResponsePromise = this.page.waitForResponse(
-      (response) => {
-        const url = response.url();
-        return /\/reservations\/\d+\/cancel$/.test(url) && response.request().method() === 'POST';
-      }
+    // 3. POST /reservations/{id}/cancel
+    // 注意: 旧コードでは削除時に cancel_type を undefined にしていたが、
+    //       実APIは circumstance_type=99 (削除) でも cancel_type 必須。
+    const postResp = await this.apiClient.post(
+      `/reservations/${found.reservationId}/cancel`,
+      {
+        circumstance_type: circumstanceType,
+        cancel_type: AppointPage.CANCEL_TYPE.TEL,
+      },
     );
 
-    // 7. キャンセル/削除を実行
-    await cancelAddHandle?.evaluate((cancelAdd) => cancelAdd?.clickExec());
-
-    // 8. POSTレスポンスを確認
-    const postResponse = await postResponsePromise;
-    const postResponseData = await postResponse.json() as ReservationApiResponse;
-    this.step(`cancelOrDeleteReservation: POST response received`);
-
-    if (!postResponseData.result) {
+    if (!postResp.result) {
       let errorMessage = `予約${operationName}に失敗しました`;
-      if (postResponseData.message) {
-        const messages = typeof postResponseData.message === 'string' ? [postResponseData.message] : Object.values(postResponseData.message).flat();
+      if (postResp.message) {
+        const messages = typeof postResp.message === 'string'
+          ? [postResp.message]
+          : Object.values(postResp.message).flat();
         errorMessage = messages.join(' ') || errorMessage;
       }
-      console.error(`[AppointPage] 予約${operationName}失敗: ${errorMessage}`);
-
-      await this.reload();
-      await this.waitForLoading();
-
       return { error: errorMessage };
     }
-
-    await this.waitForLoading();
 
     this.step(`cancelOrDeleteReservation: complete (reservationId: ${found.reservationId})`);
     return { reservationId: found.reservationId };

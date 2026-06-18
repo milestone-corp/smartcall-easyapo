@@ -304,6 +304,14 @@ export type ReservationDetailResponse = ApiResponse<{
   cancel: number;
   /** ステータス */
   status: number;
+  /** 治療メニューID */
+  treatment_id: number | null;
+  /** 表示色 */
+  color: string;
+  /** 担当者（pic）情報 */
+  pic: Array<{ id: number; name: string }> | null | Array<null>;
+  /** メモ */
+  memo: Array<{ id: number; memo: string }>;
   /** 患者情報 */
   patient: {
     /** 患者ID */
