@@ -50,21 +50,43 @@ cp envs/_template.env envs/57-konishi.env
 
 ### 0-3. デプロイコマンド
 
+本番店舗は `scripts/deploy.sh <店舗ID>`、Staging は `scripts/deploy-staging.sh` と
+スクリプトが分かれている（複数院同居 vs 単一の挙動差を分離するため）。
+
 ```bash
-# 実行内容だけ確認（接続しない）
-./scripts/deploy.sh 57 --dry-run
+# --- 本番店舗 ---
+./scripts/deploy.sh 57 --dry-run   # 実行内容だけ確認（接続しない）
+./scripts/deploy.sh 57             # 小西
+./scripts/deploy.sh 165            # ビーンズ
+./scripts/deploy.sh 128            # ゆきデンタル
+SKIP_GIT_SYNC=1 ./scripts/deploy.sh 57   # main 同期チェックをスキップ
 
-# Staging へデプロイ
-./scripts/deploy.sh staging
-
-# 各店舗 本番へデプロイ
-./scripts/deploy.sh 57     # 小西
-./scripts/deploy.sh 165    # ビーンズ
-./scripts/deploy.sh 128    # ゆきデンタル
-
-# main 同期チェックをスキップ
-SKIP_GIT_SYNC=1 ./scripts/deploy.sh 57
+# --- Staging ---
+./scripts/deploy-staging.sh        # RPA03 へ
 ```
+
+### 0-3-1. 複数院同居サーバでの隔離（重要）
+
+RPA01 に watai/konishi/ikeda の3院、RPA04 に beans-shika/yuki-dental の2院が
+**同一サーバ・同一ディレクトリ**に同居する。`docker-compose.shop.yml` は
+service 名が `easyapo` 1つのため、何もしないと docker compose が
+「同一サービスの既存コンテナ」とみなして他院を置換してしまう。
+
+これを防ぐため `deploy.sh` は **`COMPOSE_PROJECT_NAME=smartcall-easyapo-<SHOP_NAME>`**
+を店舗別に設定して各院を別 project として隔離する。
+医院の分離の本質はあくまで **port**（3011/3012/3013…）であり、
+`container_name` は `docker ps` / `docker logs` 用の運用ラベルにすぎない。
+
+| 店舗 | compose project | container_name | port |
+|---|---|---|---|
+| 渡井 | smartcall-easyapo-watai | smartcall-easyapo-watai | 3011 |
+| 小西 | smartcall-easyapo-konishi | smartcall-easyapo-konishi | 3012 |
+| 池田 | smartcall-easyapo-ikeda | smartcall-easyapo-ikeda | 3013 |
+| ビーンズ | smartcall-easyapo-beans-shika | beans-shika | 3011 |
+| ゆきデンタル | smartcall-easyapo-yuki-dental | yuki-dental | 3012 |
+
+**本番 deploy.sh は `--remove-orphans` を使わない**（他院コンテナを巻き込むため）。
+Staging のみ `deploy-staging.sh` で `--remove-orphans` を使う（1院しか居ないため安全）。
 
 ### 0-4. 検証（デプロイ後）
 
@@ -78,15 +100,39 @@ ssh -i ~/.ssh/milestone centos@153.126.214.207 \
    -H 'X-RPA-Login-Id: <ID>' -H 'X-RPA-Login-Password: <PW>'" | jq
 ```
 
-### 0-5. 旧コンテナからの移行（重要）
+### 0-5. 旧コンテナからの移行（初回のみ手動作業が必要）
 
-旧 `docker-compose.*.yml` で起動済みのコンテナがあるサーバへ初めて新フローでデプロイすると、
-**同名コンテナの衝突**が起きうる。`deploy.sh` は `docker compose up -d --remove-orphans` を
-使うため、新 compose project に属さない旧コンテナは自動でクリーンアップされる。
+旧 `docker-compose.{prod,beans-shika,yuki-dental}.yml` で起動済みのコンテナが居る本番サーバへ
+初めて新フローでデプロイすると、**同名コンテナ + 同ポートの衝突**が起きる。
 
-> 2026-06-19 の staging 初回デプロイでは、旧 `docker-compose.staging.yml` で 8 日間
-> 稼働していたコンテナと名前衝突したため、一度 `docker compose -f docker-compose.staging.yml down`
-> で旧コンテナを停止してから新フローで起動した。`--remove-orphans` 追加後はこの手動作業は不要。
+本番 `deploy.sh` は他院を巻き込まないよう `--remove-orphans` を**使わない**ため、
+**初回移行時のみ、対象院の旧コンテナを手動で停止・削除**しておく必要がある。
+
+```bash
+# 例: 小西 (konishi, RPA01:3012) を新フローへ移行する初回
+# 1. 既存コンテナを停止・削除（ポート3012を解放）
+ssh -i ~/.ssh/milestone centos@153.126.214.207 \
+  "ssh -i ~/.ssh/milestone alma@192.168.20.70 'sudo docker rm -f smartcall-easyapo-konishi'"
+
+# 2. 新フローでデプロイ
+./scripts/deploy.sh 57
+```
+
+> 旧 `docker-compose.prod.yml` は3院（watai/konishi/ikeda）を1 project で同居させているため、
+> `docker compose -f docker-compose.prod.yml down` を打つと**3院全部が止まる**。
+> 初回移行では `docker rm -f <該当コンテナ名>` で**1院ずつ**外すのが安全。
+>
+> 2回目以降は新フロー同士（同じ project 名）なので衝突せず、`deploy.sh <ID>` だけで再デプロイできる。
+
+#### 本番サーバの現状（2026-06-19 時点）
+
+| サーバ | コンテナ | port | 状態 |
+|---|---|---|---|
+| RPA01 (.70) | smartcall-easyapo-watai | 3011 | healthy（旧prod.yml） |
+| RPA01 (.70) | smartcall-easyapo-konishi | 3012 | healthy（旧prod.yml） |
+| RPA01 (.70) | smartcall-easyapo-ikeda | 3013 | healthy（旧prod.yml） |
+| RPA04 (.73) | beans-shika | 3011 | healthy（旧beans-shika.yml） |
+| RPA04 (.73) | yuki-dental | 3012 | **unhealthy**（旧yuki-dental.yml、Vue3移行で停止中の可能性） |
 
 ### 0-6. 検証済み（2026-06-19）
 
