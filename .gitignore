@@ -7,6 +7,11 @@ dist/
 # Environment variables
 .env
 
+# 店舗ごとのデプロイ用envファイル（テンプレートのみコミット可）
+envs/*
+!envs/_template.env
+!envs/.gitkeep
+
 # Screenshots
 screenshots/
 
