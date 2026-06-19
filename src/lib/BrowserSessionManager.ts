@@ -6,6 +6,7 @@
 
 import { BaseBrowserSessionManager, type BaseSessionConfig } from '@smartcall/rpa-sdk';
 import type { Page } from 'playwright';
+import { AppointPage } from '../pages/AppointPage.js';
 import { LoginPage } from '../pages/LoginPage.js';
 
 /** 認証情報型 */
@@ -68,7 +69,12 @@ export class BrowserSessionManager extends BaseBrowserSessionManager {
 
     const { credentials, baseUrl } = this.easyApoConfig;
 
-    await this.page.goto(`${baseUrl}/`);
+    AppointPage.clearCache();
+
+    // Ci EasyApo 2 (Vue3 SPA) は /reservations/badge を10秒ごとにポーリングし続けるため、
+    // デフォルトの waitUntil:'load' / 'networkidle' は成立せずタイムアウトする。
+    // DOM 構築まで待てば LoginPage.login 内の waitForSelector('.login-wrapper') で十分。
+    await this.page.goto(`${baseUrl}/`, { waitUntil: 'domcontentloaded' });
     const loginPage = new LoginPage(this.page);
     await loginPage.login(credentials.loginKey, credentials.loginPassword);
   }
@@ -90,7 +96,9 @@ export class BrowserSessionManager extends BaseBrowserSessionManager {
     if (!this.page) return;
 
     const { baseUrl, keepAlivePath } = this.easyApoConfig;
-    await this.page.goto(`${baseUrl}${keepAlivePath}`, { waitUntil: 'networkidle' });
+    // Vue3 SPA は badge ポーリングが続き networkidle に到達しないため domcontentloaded を使う。
+    // （旧 'networkidle' は30秒タイムアウト→セッションerror→プロセスクラッシュの原因だった）
+    await this.page.goto(`${baseUrl}${keepAlivePath}`, { waitUntil: 'domcontentloaded' });
   }
 
   /**

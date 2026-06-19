@@ -7,6 +7,11 @@ dist/
 # Environment variables
 .env
 
+# 店舗ごとのデプロイ用envファイル（テンプレートのみコミット可）
+envs/*
+!envs/_template.env
+!envs/.gitkeep
+
 # Screenshots
 screenshots/
 
@@ -28,4 +33,16 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-/package-lock.json
+
+# Playwright MCP working files (snapshots/console/採取JSON)
+.playwright-mcp/
+
+# Agent
+## Serena
+.serena
+.serena/cache
+## Claude(Local)
+.claude/debug
+.claude/plugins/cache
+.claude/plugins/CLAUDE.md
+.claude/settings.local.json

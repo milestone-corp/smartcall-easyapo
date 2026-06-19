@@ -1,0 +1,36 @@
+# =========================================================================
+# 店舗別デプロイ用 docker-compose（envs/<SHOP_ID>-<SHOP_NAME>.env を読む）
+#
+# 使い方:
+#   ./scripts/deploy.sh <SHOP_ID>  → サーバ上で内部的にこのファイルを利用
+#   または手動: cp envs/57-konishi.env .env && docker compose -f docker-compose.shop.yml up -d --build
+#
+# 参照する環境変数:
+#   - SHOP_NAME           : container_name のサフィックス、screenshots ディレクトリ識別子
+#   - SHOP_PORT           : ホスト側公開ポート
+#   - CONTAINER_NAME      : (任意) 既存互換のためコンテナ名を明示する場合
+#   - KEEP_ALIVE_INTERVAL_MS : Keep-alive 間隔（任意、デフォルト10分）
+# =========================================================================
+
+services:
+  easyapo:
+    build: .
+    # CONTAINER_NAME が未指定なら smartcall-easyapo-<SHOP_NAME> を自動採用
+    container_name: ${CONTAINER_NAME:-smartcall-easyapo-${SHOP_NAME}}
+    env_file:
+      - .env
+    environment:
+      - KEEP_ALIVE_INTERVAL_MS=${KEEP_ALIVE_INTERVAL_MS:-600000}
+    ports:
+      - "${SHOP_PORT}:3000"
+    volumes:
+      - ./screenshots/${SHOP_NAME}:/app/screenshots
+      - ./input:/app/input
+      - ./output:/app/output
+    restart: unless-stopped
+    command: ["npm", "run", "start"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
