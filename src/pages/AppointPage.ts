@@ -152,9 +152,6 @@ export class AppointPage extends BasePage {
   /** カラム情報（column_rows）のキャッシュ - 接続ごとに1回取得すれば変わらない */
   private static columnsCache: ColumnRow[] | null = null;
 
-  /** EasyApo内部treatments マスタのキャッシュ - メニュー名→treatment_id 解決用 */
-  private static easyApoTreatmentsCache: Array<{ id: number; title: string }> | null = null;
-
   /** キャッシュをクリア（再ログイン時に呼び出す） */
   static clearCache(): void {
     AppointPage.treatmentItemsCache = null;
@@ -162,7 +159,6 @@ export class AppointPage extends BasePage {
     AppointPage.webSettingCache = null;
     AppointPage.webSettingCacheTime = 0;
     AppointPage.columnsCache = null;
-    AppointPage.easyApoTreatmentsCache = null;
   }
 
   /**
@@ -310,36 +306,6 @@ export class AppointPage extends BasePage {
       time_from_num: typeof r.time_from === 'string' ? r.time_from.replace(':', '') : '',
       time_to_num: typeof r.time_to === 'string' ? r.time_to.replace(':', '') : '',
     })) as unknown as ReserveRow[];
-  }
-
-  /**
-   * EasyApo内部の treatments マスタを取得（メニュー名→treatment_id 解決用）
-   *
-   * /treatment_items (Web予約用、id=14970系) と
-   * /treatments (EasyApo内部、id=91529系) は別IDマスタなので、
-   * 予約の treatment_id にはこちらの id を設定する必要がある。
-   */
-  private async getEasyApoTreatments(): Promise<Array<{ id: number; title: string }>> {
-    if (AppointPage.easyApoTreatmentsCache) return AppointPage.easyApoTreatmentsCache;
-    const resp = await this.apiClient.get<{
-      treatments: Array<{ id: number; title: string }>;
-    }>('/treatments');
-    const list = resp.data?.treatments ?? [];
-    AppointPage.easyApoTreatmentsCache = list;
-    return list;
-  }
-
-  /**
-   * メニュー名から EasyApo treatments の id を解決
-   * 完全一致で見つからない場合は部分一致でフォールバック
-   */
-  private async resolveTreatmentId(menuName: string | undefined): Promise<number | null> {
-    if (!menuName) return null;
-    const treatments = await this.getEasyApoTreatments();
-    const exact = treatments.find((t) => t.title === menuName);
-    if (exact) return exact.id;
-    const partial = treatments.find((t) => t.title.includes(menuName) || menuName.includes(t.title));
-    return partial?.id ?? null;
   }
 
   /**
@@ -1181,10 +1147,10 @@ export class AppointPage extends BasePage {
       : [];
 
     // 7. POST /reservations
-    // /treatment_items の id (例: 14970) と EasyApo treatments の id (例: 92390) は別体系。
-    // 後者を resolveTreatmentId でメニュー名から解決する（見つからなければ null）。
-    const menuNameForTreatment = matchedItem?.title || menu?.menu_name;
-    const treatmentId = await this.resolveTreatmentId(menuNameForTreatment);
+    // treatment_id（診療内容）は EasyApo の /treatments マスタ（EXT/RCT/義歯imp 等の施術手技）
+    // に属し、来院後にスタッフが施術内容を記録するための値。Web/電話予約の時点では確定しない。
+    // 旧Vue2コードも treatment_id をセットせず null で送信し、メニュー（症状）は memo に残していた。
+    // 症状名→施術手技の機械推定は不正確なため、ここでは旧来どおり null を送る。
     const postResp = await this.apiClient.post<{ confirmation?: string }>('/reservations', {
       patient_number: patientId ?? '',
       reservation_date: date,
@@ -1192,7 +1158,7 @@ export class AppointPage extends BasePage {
       time_from: timeFrom,
       time_to: calculatedTimeTo,
       patient_name: customerName,
-      treatment_id: treatmentId,
+      treatment_id: null,
       color: menuColor ?? '#FFFFFF',
       pic: [null, null, null],
       memo,
@@ -1770,11 +1736,10 @@ export class AppointPage extends BasePage {
     }
 
     // 7. 更新body組み立て（既存データをベースに変更を適用）
-    // メニュー指定があれば EasyApo treatments の id を解決、それ以外は既存値を維持
-    const newMenuName = matchedItem?.title || menu?.menu_name;
-    const newTreatmentId = newMenuName
-      ? (await this.resolveTreatmentId(newMenuName)) ?? existing.treatment_id ?? null
-      : (existing.treatment_id ?? null);
+    // treatment_id（診療内容＝施術手技）は来院後にスタッフが付ける値。
+    // 予約変更でメニュー（症状）から推定して上書きすると、確定済みの施術記録を壊すため、
+    // 既存値をそのまま維持する（無ければ null）。
+    const newTreatmentId = existing.treatment_id ?? null;
     const parseHm = (t: string): [number, number] => {
       const [h, m] = t.split(':').map((s) => parseInt(s, 10));
       return [Number.isNaN(h) ? 0 : h, Number.isNaN(m) ? 0 : m];
@@ -1823,8 +1788,7 @@ export class AppointPage extends BasePage {
         reservation_date: newReservationDate,
         time_from: newTimeFrom,
         time_to: newTimeTo,
-        // メニュー変更がある場合は EasyApo treatments の id を引き直す。
-        // それ以外は既存値を尊重（buildBody は同期関数なので、updateReservation本体で解決済みのidを使う）
+        // 診療内容は既存値を維持（updateReservation本体で解決済み）
         treatment_id: newTreatmentId,
         patient_name: existing.patient_name,
         color: menuColor ?? existing.color ?? '#FFFFFF',
